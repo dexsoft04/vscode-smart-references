@@ -107,6 +107,16 @@
         "icon": "$(list-tree)"
       },
       {
+        "command": "smartReferences.pinReferenceResults",
+        "title": "Pin Reference Results",
+        "icon": "$(pinned)"
+      },
+      {
+        "command": "smartReferences.openPinnedReferenceResults",
+        "title": "Open Pinned Reference Results",
+        "icon": "$(history)"
+      },
+      {
         "command": "smartReferences.toggleProjectViewMode",
         "title": "Toggle Categorized / Merged View",
         "icon": "$(group-by-ref-type)"
@@ -260,6 +270,16 @@
         },
         {
           "command": "smartReferences.setReferenceGrouping",
+          "when": "view == smartReferencesTree",
+          "group": "navigation"
+        },
+        {
+          "command": "smartReferences.pinReferenceResults",
+          "when": "view == smartReferencesTree",
+          "group": "navigation"
+        },
+        {
+          "command": "smartReferences.openPinnedReferenceResults",
           "when": "view == smartReferencesTree",
           "group": "navigation"
         },

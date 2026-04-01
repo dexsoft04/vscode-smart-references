@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { ClassifiedReference, ReferenceCategory, CodeContext } from '../core/ReferenceTypes';
+import { ClassifiedReference, ReferenceCategory, CodeContext, locationKey } from '../core/ReferenceTypes';
 import { makeCategoryUri } from './CategoryDecorationProvider';
 import { extractDocComment } from './StructureTreeProvider';
 
@@ -159,6 +159,7 @@ export class ReferenceItem extends vscode.TreeItem {
 // ── Provider ──────────────────────────────────────────────────────────────────
 
 const MAX_HISTORY = 20;
+const MAX_PINNED = 20;
 // When total references exceed this threshold, only the category level is
 // auto-expanded; directory / file / caller nodes start collapsed.
 const AUTO_EXPAND_THRESHOLD = 20;
@@ -166,6 +167,15 @@ const AUTO_EXPAND_THRESHOLD = 20;
 interface HistoryEntry {
   symbolName: string;
   refs: ClassifiedReference[];
+}
+
+export interface PinnedReferenceResult {
+  id: string;
+  symbolName: string;
+  refs: ClassifiedReference[];
+  scopeFilter: ReferenceScopeFilter;
+  groupingMode: ReferenceGroupingMode;
+  pinnedAt: number;
 }
 
 export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>, vscode.Disposable {
@@ -182,6 +192,7 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
 
   private history: HistoryEntry[] = [];
   private historyIndex = -1;
+  private pinnedResults: PinnedReferenceResult[] = [];
 
   constructor() {
     this.workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -229,6 +240,10 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
     this._onDidChangeTreeData.fire();
   }
 
+  hasResults(): boolean {
+    return this.allRefs.length > 0;
+  }
+
   setScopeFilter(filter: ReferenceScopeFilter): void {
     if (this.scopeFilter === filter) return;
     this.scopeFilter = filter;
@@ -248,6 +263,53 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
 
   getGroupingMode(): ReferenceGroupingMode {
     return this.groupingMode;
+  }
+
+  pinCurrentResults(): { entry: PinnedReferenceResult; isNew: boolean } | undefined {
+    if (!this.hasResults()) return undefined;
+
+    const existing = this.pinnedResults.find(entry => this.isSameSnapshot(entry.symbolName, entry.refs, this.allRefs));
+    if (existing) {
+      existing.scopeFilter = this.scopeFilter;
+      existing.groupingMode = this.groupingMode;
+      existing.pinnedAt = Date.now();
+      this.sortPinnedResults();
+      return { entry: existing, isNew: false };
+    }
+
+    const entry: PinnedReferenceResult = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      symbolName: this.symbolName,
+      refs: [...this.allRefs],
+      scopeFilter: this.scopeFilter,
+      groupingMode: this.groupingMode,
+      pinnedAt: Date.now(),
+    };
+    this.pinnedResults.unshift(entry);
+    if (this.pinnedResults.length > MAX_PINNED) {
+      this.pinnedResults.length = MAX_PINNED;
+    }
+    return { entry, isNew: true };
+  }
+
+  getPinnedResults(): readonly PinnedReferenceResult[] {
+    return this.pinnedResults;
+  }
+
+  openPinnedResult(id: string): boolean {
+    const entry = this.pinnedResults.find(item => item.id === id);
+    if (!entry) return false;
+
+    this.scopeFilter = entry.scopeFilter;
+    this.groupingMode = entry.groupingMode;
+    this.setResults(entry.symbolName, entry.refs);
+    return true;
+  }
+
+  removePinnedResult(id: string): boolean {
+    const before = this.pinnedResults.length;
+    this.pinnedResults = this.pinnedResults.filter(entry => entry.id !== id);
+    return this.pinnedResults.length !== before;
   }
 
   getTreeItem(element: TreeNode): vscode.TreeItem { return element; }
@@ -463,6 +525,19 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
       return ref.context === CodeContext.Test;
     });
     this.expandSubLevels = this.refs.length <= AUTO_EXPAND_THRESHOLD;
+  }
+
+  private isSameSnapshot(symbolName: string, refsA: ClassifiedReference[], refsB: ClassifiedReference[]): boolean {
+    if (this.symbolName !== symbolName) return false;
+    if (refsA.length !== refsB.length) return false;
+
+    const aKeys = refsA.map(ref => locationKey(ref.location)).sort();
+    const bKeys = refsB.map(ref => locationKey(ref.location)).sort();
+    return aKeys.every((key, index) => key === bKeys[index]);
+  }
+
+  private sortPinnedResults(): void {
+    this.pinnedResults.sort((a, b) => b.pinnedAt - a.pinnedAt);
   }
 
   dispose(): void {

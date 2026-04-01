@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { ReferenceTreeProvider, ReferenceScopeFilter, ReferenceGroupingMode } from './providers/ReferenceTreeProvider';
+import { ReferenceTreeProvider, ReferenceScopeFilter, ReferenceGroupingMode, PinnedReferenceResult } from './providers/ReferenceTreeProvider';
 import { ReferenceLensProvider } from './providers/ReferenceLensProvider';
 import { ReferenceClassifier } from './core/ReferenceClassifier';
 import { ReferenceCache } from './core/Cache';
@@ -399,11 +399,11 @@ export function activate(context: vscode.ExtensionContext): void {
           if (refs.length === 0) {
             vscode.window.showInformationMessage('No references found');
             treeProvider.clear();
-            treeView.title = 'References';
+            refreshReferenceTitle();
             return;
           }
           treeProvider.setResults(symbolName, refs);
-          treeView.title = treeProvider.getSymbolLabel();
+          refreshReferenceTitle();
           updateRefHistoryContext();
           scheduleRevealActiveReference(vscode.window.activeTextEditor);
           await vscode.commands.executeCommand('smartReferencesTree.focus');
@@ -485,6 +485,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.executeCommand('setContext', 'smartReferences.canGoBack', treeProvider.canGoBack());
     vscode.commands.executeCommand('setContext', 'smartReferences.canGoForward', treeProvider.canGoForward());
   }
+  function refreshReferenceTitle(): void {
+    treeView.title = treeProvider.getSymbolLabel() || 'References';
+  }
   function updateImplHistoryContext(): void {
     vscode.commands.executeCommand('setContext', 'smartReferences.canImplGoBack', hierarchyProvider.canGoBack());
     vscode.commands.executeCommand('setContext', 'smartReferences.canImplGoForward', hierarchyProvider.canGoForward());
@@ -492,13 +495,13 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const prevRefCmd = vscode.commands.registerCommand('smartReferences.previousResult', () => {
     treeProvider.goBack();
-    treeView.title = treeProvider.getSymbolLabel();
+    refreshReferenceTitle();
     updateRefHistoryContext();
     scheduleRevealActiveReference();
   });
   const nextRefCmd = vscode.commands.registerCommand('smartReferences.nextResult', () => {
     treeProvider.goForward();
-    treeView.title = treeProvider.getSymbolLabel();
+    refreshReferenceTitle();
     updateRefHistoryContext();
     scheduleRevealActiveReference();
   });
@@ -579,7 +582,7 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       if (!nextScope) return;
       treeProvider.setScopeFilter(nextScope);
-      treeView.title = treeProvider.getSymbolLabel() || 'References';
+      refreshReferenceTitle();
       scheduleRevealActiveReference();
     },
   );
@@ -599,6 +602,69 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!nextMode) return;
       treeProvider.setGroupingMode(nextMode);
       scheduleRevealActiveReference();
+    },
+  );
+  const pinReferenceResultsCmd = vscode.commands.registerCommand(
+    'smartReferences.pinReferenceResults',
+    () => {
+      const pinned = treeProvider.pinCurrentResults();
+      if (!pinned) {
+        vscode.window.showInformationMessage('No reference results to pin');
+        return;
+      }
+      const action = pinned.isNew ? 'Pinned' : 'Updated pin for';
+      vscode.window.showInformationMessage(`${action} "${pinned.entry.symbolName}"`);
+    },
+  );
+  const openPinnedReferenceResultsCmd = vscode.commands.registerCommand(
+    'smartReferences.openPinnedReferenceResults',
+    async () => {
+      const removeButton: vscode.QuickInputButton = {
+        iconPath: new vscode.ThemeIcon('trash'),
+        tooltip: 'Remove pinned result',
+      };
+      const buildItems = (): (vscode.QuickPickItem & { entry: PinnedReferenceResult })[] =>
+        treeProvider.getPinnedResults().map(entry => ({
+          label: entry.symbolName || '(anonymous symbol)',
+          description: `${entry.refs.length} usages`,
+          detail: `${new Date(entry.pinnedAt).toLocaleString()} · ${entry.scopeFilter} · ${entry.groupingMode}`,
+          buttons: [removeButton],
+          entry,
+        }));
+
+      if (buildItems().length === 0) {
+        vscode.window.showInformationMessage('No pinned reference results');
+        return;
+      }
+
+      const quickPick = vscode.window.createQuickPick<vscode.QuickPickItem & { entry: PinnedReferenceResult }>();
+      quickPick.title = 'Pinned Reference Results';
+      quickPick.placeholder = 'Select a pinned result to reopen';
+      quickPick.matchOnDescription = true;
+      quickPick.matchOnDetail = true;
+      quickPick.items = buildItems();
+
+      quickPick.onDidTriggerItemButton(e => {
+        treeProvider.removePinnedResult(e.item.entry.id);
+        quickPick.items = buildItems();
+        if (quickPick.items.length === 0) {
+          quickPick.hide();
+          vscode.window.showInformationMessage('No pinned reference results');
+        }
+      });
+      quickPick.onDidAccept(() => {
+        const selected = quickPick.selectedItems[0];
+        if (!selected) return;
+        if (treeProvider.openPinnedResult(selected.entry.id)) {
+          refreshReferenceTitle();
+          updateRefHistoryContext();
+          scheduleRevealActiveReference();
+          void vscode.commands.executeCommand('smartReferencesTree.focus');
+        }
+        quickPick.hide();
+      });
+      quickPick.onDidHide(() => quickPick.dispose());
+      quickPick.show();
     },
   );
 
@@ -806,6 +872,8 @@ export function activate(context: vscode.ExtensionContext): void {
     toggleProjectViewCmd,
     setReferenceScopeCmd,
     setReferenceGroupingCmd,
+    pinReferenceResultsCmd,
+    openPinnedReferenceResultsCmd,
     revealInOSCmd,
     openTerminalCmd,
     openToSideCmd,
