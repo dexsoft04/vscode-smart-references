@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { ReferenceTreeProvider, ReferenceScopeFilter } from './providers/ReferenceTreeProvider';
+import { ReferenceTreeProvider, ReferenceScopeFilter, ReferenceGroupingMode } from './providers/ReferenceTreeProvider';
 import { ReferenceLensProvider } from './providers/ReferenceLensProvider';
 import { ReferenceClassifier } from './core/ReferenceClassifier';
 import { ReferenceCache } from './core/Cache';
@@ -536,6 +536,23 @@ export function activate(context: vscode.ExtensionContext): void {
       treeView.title = treeProvider.getSymbolLabel() || 'References';
     },
   );
+  const setReferenceGroupingCmd = vscode.commands.registerCommand(
+    'smartReferences.setReferenceGrouping',
+    async (mode?: ReferenceGroupingMode) => {
+      let nextMode = mode;
+      if (!nextMode) {
+        const picked = await vscode.window.showQuickPick([
+          { label: 'By Directory', description: '分类后按目录树分组', value: 'directory' as const },
+          { label: 'By File', description: '分类后直接按文件分组', value: 'file' as const },
+        ], {
+          placeHolder: 'Group reference results',
+        });
+        nextMode = picked?.value;
+      }
+      if (!nextMode) return;
+      treeProvider.setGroupingMode(nextMode);
+    },
+  );
 
   // Context menu commands for Project Explorer
   const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
@@ -739,6 +756,7 @@ export function activate(context: vscode.ExtensionContext): void {
     refreshProjectCmd,
     toggleProjectViewCmd,
     setReferenceScopeCmd,
+    setReferenceGroupingCmd,
     revealInOSCmd,
     openTerminalCmd,
     openToSideCmd,

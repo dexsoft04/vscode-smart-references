@@ -6,6 +6,7 @@ import { extractDocComment } from './StructureTreeProvider';
 
 type TreeNode = CategoryGroupNode | DirectoryNode | FileNode | CallerNode | ReferenceItem;
 export type ReferenceScopeFilter = 'all' | 'production' | 'test';
+export type ReferenceGroupingMode = 'directory' | 'file';
 
 // ── Category group definition ─────────────────────────────────────────────────
 
@@ -87,8 +88,9 @@ class FileNode extends vscode.TreeItem {
     public readonly uri: vscode.Uri,
     public readonly refs: ClassifiedReference[],
     expand = true,
+    labelText?: string,
   ) {
-    super(path.basename(uri.fsPath), expand ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
+    super(labelText ?? path.basename(uri.fsPath), expand ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
     this.description = `${refs.length}`;
     this.tooltip = uri.fsPath;
     this.resourceUri = uri;
@@ -176,6 +178,7 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
   private expandSubLevels = true;
   private workspaceRoot?: string;
   private scopeFilter: ReferenceScopeFilter = 'all';
+  private groupingMode: ReferenceGroupingMode = 'directory';
 
   private history: HistoryEntry[] = [];
   private historyIndex = -1;
@@ -237,6 +240,16 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
     return this.scopeFilter;
   }
 
+  setGroupingMode(mode: ReferenceGroupingMode): void {
+    if (this.groupingMode === mode) return;
+    this.groupingMode = mode;
+    this._onDidChangeTreeData.fire();
+  }
+
+  getGroupingMode(): ReferenceGroupingMode {
+    return this.groupingMode;
+  }
+
   getTreeItem(element: TreeNode): vscode.TreeItem { return element; }
 
   getChildren(element?: TreeNode): TreeNode[] | Thenable<TreeNode[]> {
@@ -244,7 +257,9 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
       return buildCategoryGroups(this.refs).map(g => new CategoryGroupNode(g));
     }
     if (element instanceof CategoryGroupNode) {
-      return this.buildDirectoryNodes(element.group.refs);
+      return this.groupingMode === 'directory'
+        ? this.buildDirectoryNodes(element.group.refs)
+        : this.buildFileNodes(element.group.refs, true);
     }
     if (element instanceof DirectoryNode) {
       return this.buildFileNodes(element.refs);
@@ -265,6 +280,11 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
     return path.relative(this.workspaceRoot, path.dirname(fsPath)) || '.';
   }
 
+  private getRelativeFilePath(fsPath: string): string {
+    if (!this.workspaceRoot) return fsPath;
+    return path.relative(this.workspaceRoot, fsPath) || path.basename(fsPath);
+  }
+
   private buildDirectoryNodes(refs: ClassifiedReference[]): TreeNode[] {
     const byDir = new Map<string, ClassifiedReference[]>();
     for (const ref of refs) {
@@ -278,7 +298,7 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
       .map(([dir, dirRefs]) => new DirectoryNode(dir, dirRefs, this.expandSubLevels));
   }
 
-  private buildFileNodes(refs: ClassifiedReference[]): FileNode[] {
+  private buildFileNodes(refs: ClassifiedReference[], showRelativePath = false): FileNode[] {
     const byFile = new Map<string, ClassifiedReference[]>();
     for (const ref of refs) {
       const key = ref.location.uri.toString();
@@ -287,7 +307,12 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
     }
     return Array.from(byFile.values())
       .sort((a, b) => a[0].location.uri.fsPath.localeCompare(b[0].location.uri.fsPath))
-      .map(r => new FileNode(r[0].location.uri, r, this.expandSubLevels));
+      .map(r => new FileNode(
+        r[0].location.uri,
+        r,
+        this.expandSubLevels,
+        showRelativePath ? this.getRelativeFilePath(r[0].location.uri.fsPath) : undefined,
+      ));
   }
 
   private async buildCallerNodes(refs: ClassifiedReference[], fileUri: vscode.Uri): Promise<TreeNode[]> {

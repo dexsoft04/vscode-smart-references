@@ -102,6 +102,11 @@
         "icon": "$(filter)"
       },
       {
+        "command": "smartReferences.setReferenceGrouping",
+        "title": "Group References",
+        "icon": "$(list-tree)"
+      },
+      {
         "command": "smartReferences.toggleProjectViewMode",
         "title": "Toggle Categorized / Merged View",
         "icon": "$(group-by-ref-type)"
@@ -250,6 +255,11 @@
         },
         {
           "command": "smartReferences.setReferenceScope",
+          "when": "view == smartReferencesTree",
+          "group": "navigation"
+        },
+        {
+          "command": "smartReferences.setReferenceGrouping",
           "when": "view == smartReferencesTree",
           "group": "navigation"
         },
