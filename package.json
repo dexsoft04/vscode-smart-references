@@ -1,0 +1,463 @@
+{
+  "name": "vscode-intellij-style-references",
+  "displayName": "IntelliJ-Style References",
+  "description": "IntelliJ-style classified reference finder — groups by definition, implementation, read/write access, comments, and test files",
+  "version": "0.1.0",
+  "publisher": "smart-references",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "smartReferences.findReferences",
+        "title": "Find Smart References"
+      },
+      {
+        "command": "smartReferences.showTypeHierarchy",
+        "title": "Find Implementations"
+      },
+      {
+        "command": "smartReferences.goToImplementation",
+        "title": "Go to Implementation"
+      },
+      {
+        "command": "smartReferences.searchSymbol",
+        "title": "Search Symbol",
+        "icon": "$(search)"
+      },
+      {
+        "command": "smartReferences.searchFunction",
+        "title": "Search Function / Method",
+        "icon": "$(symbol-method)"
+      },
+      {
+        "command": "smartReferences.searchType",
+        "title": "Search Type",
+        "icon": "$(symbol-class)"
+      },
+      {
+        "command": "smartReferences.previousResult",
+        "title": "Previous Result",
+        "icon": "$(arrow-left)",
+        "enablement": "smartReferences.canGoBack"
+      },
+      {
+        "command": "smartReferences.nextResult",
+        "title": "Next Result",
+        "icon": "$(arrow-right)",
+        "enablement": "smartReferences.canGoForward"
+      },
+      {
+        "command": "smartReferences.previousImpl",
+        "title": "Previous Result",
+        "icon": "$(arrow-left)",
+        "enablement": "smartReferences.canImplGoBack"
+      },
+      {
+        "command": "smartReferences.nextImpl",
+        "title": "Next Result",
+        "icon": "$(arrow-right)",
+        "enablement": "smartReferences.canImplGoForward"
+      },
+      {
+        "command": "smartReferences.refreshDeps",
+        "title": "Refresh Dependencies",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "smartReferences.searchDependencySymbols",
+        "title": "Search Dependency Symbols",
+        "icon": "$(search)"
+      },
+      {
+        "command": "smartReferences.searchDeps",
+        "title": "Search Dependencies",
+        "icon": "$(search)"
+      },
+      {
+        "command": "smartReferences.showStructure",
+        "title": "Show File Structure"
+      },
+      {
+        "command": "smartReferences.refreshStructure",
+        "title": "Refresh Structure",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "smartReferences.refreshProjectExplorer",
+        "title": "Refresh Project Files",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "smartReferences.toggleProjectViewMode",
+        "title": "Toggle Categorized / Merged View",
+        "icon": "$(group-by-ref-type)"
+      },
+      {
+        "command": "smartReferences.openToSide",
+        "title": "Open to the Side"
+      },
+      {
+        "command": "smartReferences.revealInOS",
+        "title": "Reveal in File Explorer"
+      },
+      {
+        "command": "smartReferences.openTerminalHere",
+        "title": "Open in Integrated Terminal"
+      },
+      {
+        "command": "smartReferences.findInFolder",
+        "title": "Find in Folder..."
+      },
+      {
+        "command": "smartReferences.newFile",
+        "title": "New File..."
+      },
+      {
+        "command": "smartReferences.newFolder",
+        "title": "New Folder..."
+      },
+      {
+        "command": "smartReferences.renameFile",
+        "title": "Rename"
+      },
+      {
+        "command": "smartReferences.deleteFile",
+        "title": "Delete"
+      },
+      {
+        "command": "smartReferences.copyPath",
+        "title": "Copy Path"
+      },
+      {
+        "command": "smartReferences.copyRelativePath",
+        "title": "Copy Relative Path"
+      },
+      {
+        "command": "smartReferences.translate",
+        "title": "Translate to Chinese",
+        "category": "Smart References"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "smartReferences.findReferences",
+        "key": "alt+f7",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "smartReferences.showTypeHierarchy",
+        "key": "alt+f8",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "smartReferences.searchSymbol",
+        "key": "shift shift",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "smartReferences.searchFunction",
+        "key": "ctrl+shift+n",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "smartReferences.searchType",
+        "key": "ctrl+alt+t",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "smartReferences.searchDependencySymbols",
+        "key": "shift+ctrl+alt+t",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "smartReferences.translate",
+        "key": "alt+a",
+        "when": "editorTextFocus"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        { "command": "smartReferences.goToImplementation", "when": "false" },
+        { "command": "smartReferences.openToSide", "when": "false" },
+        { "command": "smartReferences.revealInOS", "when": "false" },
+        { "command": "smartReferences.openTerminalHere", "when": "false" },
+        { "command": "smartReferences.findInFolder", "when": "false" },
+        { "command": "smartReferences.newFile", "when": "false" },
+        { "command": "smartReferences.newFolder", "when": "false" },
+        { "command": "smartReferences.renameFile", "when": "false" },
+        { "command": "smartReferences.deleteFile", "when": "false" },
+        { "command": "smartReferences.copyPath", "when": "false" },
+        { "command": "smartReferences.copyRelativePath", "when": "false" }
+      ],
+      "view/item/context": [
+        { "command": "smartReferences.openToSide", "when": "view == projectExplorer && viewItem == projectFile", "group": "navigation@1" },
+        { "command": "smartReferences.revealInOS", "when": "view == projectExplorer && viewItem == projectFile", "group": "navigation@2" },
+        { "command": "smartReferences.revealInOS", "when": "view == projectExplorer && viewItem == projectDir", "group": "navigation@2" },
+        { "command": "smartReferences.openTerminalHere", "when": "view == projectExplorer && viewItem == projectDir", "group": "navigation@3" },
+        { "command": "smartReferences.newFile", "when": "view == projectExplorer && viewItem == projectDir", "group": "2_workspace@1" },
+        { "command": "smartReferences.newFolder", "when": "view == projectExplorer && viewItem == projectDir", "group": "2_workspace@2" },
+        { "command": "smartReferences.findInFolder", "when": "view == projectExplorer && viewItem == projectDir", "group": "4_search@1" },
+        { "command": "smartReferences.copyPath", "when": "view == projectExplorer && viewItem == projectFile", "group": "6_copypath@1" },
+        { "command": "smartReferences.copyPath", "when": "view == projectExplorer && viewItem == projectDir", "group": "6_copypath@1" },
+        { "command": "smartReferences.copyRelativePath", "when": "view == projectExplorer && viewItem == projectFile", "group": "6_copypath@2" },
+        { "command": "smartReferences.copyRelativePath", "when": "view == projectExplorer && viewItem == projectDir", "group": "6_copypath@2" },
+        { "command": "smartReferences.renameFile", "when": "view == projectExplorer && viewItem == projectFile", "group": "7_modification@1" },
+        { "command": "smartReferences.renameFile", "when": "view == projectExplorer && viewItem == projectDir", "group": "7_modification@1" },
+        { "command": "smartReferences.deleteFile", "when": "view == projectExplorer && viewItem == projectFile", "group": "7_modification@2" },
+        { "command": "smartReferences.deleteFile", "when": "view == projectExplorer && viewItem == projectDir", "group": "7_modification@2" }
+      ],
+      "editor/context": [
+        {
+          "command": "smartReferences.findReferences",
+          "group": "navigation@9",
+          "when": "editorTextFocus"
+        },
+        {
+          "command": "smartReferences.showTypeHierarchy",
+          "group": "navigation@10",
+          "when": "editorTextFocus"
+        },
+        {
+          "command": "smartReferences.showStructure",
+          "group": "navigation@11",
+          "when": "editorTextFocus"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "smartReferences.previousResult",
+          "when": "view == smartReferencesTree",
+          "group": "navigation"
+        },
+        {
+          "command": "smartReferences.nextResult",
+          "when": "view == smartReferencesTree",
+          "group": "navigation"
+        },
+        {
+          "command": "smartReferences.previousImpl",
+          "when": "view == typeHierarchyTree",
+          "group": "navigation"
+        },
+        {
+          "command": "smartReferences.nextImpl",
+          "when": "view == typeHierarchyTree",
+          "group": "navigation"
+        },
+        {
+          "command": "smartReferences.searchDeps",
+          "when": "view == dependencyTree",
+          "group": "navigation"
+        },
+        {
+          "command": "smartReferences.refreshDeps",
+          "when": "view == dependencyTree",
+          "group": "navigation"
+        },
+        {
+          "command": "smartReferences.refreshStructure",
+          "when": "view == structureTree",
+          "group": "navigation"
+        },
+        {
+          "command": "smartReferences.toggleProjectViewMode",
+          "when": "view == projectExplorer",
+          "group": "navigation"
+        },
+        {
+          "command": "smartReferences.refreshProjectExplorer",
+          "when": "view == projectExplorer",
+          "group": "navigation"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "smartReferences",
+          "title": "IntelliJ-Style References",
+          "icon": "images/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "smartReferences": [
+        {
+          "id": "smartReferencesTree",
+          "name": "References"
+        },
+        {
+          "id": "typeHierarchyTree",
+          "name": "Implementations"
+        },
+        {
+          "id": "structureTree",
+          "name": "Structure"
+        },
+        {
+          "id": "dependencyTree",
+          "name": "Dependencies"
+        }
+      ],
+      "explorer": [
+        {
+          "id": "projectExplorer",
+          "name": "Project Files"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "smartReferencesTree",
+        "contents": "No references loaded yet.\n\nPlace your cursor on any symbol and run Find References.\n\n[Find References](command:smartReferences.findReferences)\n\nOr press `Alt+F7` / right-click a symbol."
+      },
+      {
+        "view": "structureTree",
+        "contents": "No file open.\n\nOpen a file to see its structure."
+      },
+      {
+        "view": "typeHierarchyTree",
+        "contents": "No implementations found yet.\n\nPlace your cursor on a class or interface and run Find Implementations.\n\n[Find Implementations](command:smartReferences.showTypeHierarchy)\n\nOr press `Alt+F8` / right-click a type."
+      },
+      {
+        "view": "dependencyTree",
+        "contents": "No supported dependency manifest found in workspace."
+      },
+      {
+        "view": "projectExplorer",
+        "contents": "No git repository found in workspace.\n\nThis view requires a git repository to categorize files."
+      }
+    ],
+    "colors": [
+      {
+        "id": "smartReferences.categoryForeground",
+        "description": "Foreground color for category headers in the references tree",
+        "defaults": {
+          "dark": "#4EC9B0",
+          "light": "#0070C1",
+          "highContrast": "#4EC9B0",
+          "highContrastLight": "#0070C1"
+        }
+      }
+    ],
+    "configuration": {
+      "title": "IntelliJ-Style References",
+      "properties": {
+        "smartReferences.testFilePatterns": {
+          "type": "array",
+          "default": [
+            "**/*_test.go",
+            "**/*.{test,spec}.{ts,tsx,js,jsx}",
+            "**/__tests__/**",
+            "**/test_*.py",
+            "**/*_test.py",
+            "**/tests/**/*.py",
+            "**/src/test/**",
+            "**/*Test.java",
+            "**/*Test.kt",
+            "**/tests/**/*.rs",
+            "**/*Tests.cs",
+            "**/*.Tests/**"
+          ],
+          "description": "Glob patterns to identify test files"
+        },
+        "smartReferences.enableCodeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show reference counts above functions and classes"
+        },
+        "smartReferences.enableReadWriteClassification": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable read/write access classification"
+        },
+        "smartReferences.enableCommentDetection": {
+          "type": "boolean",
+          "default": true,
+          "description": "Detect references inside comments via semantic tokens"
+        },
+        "smartReferences.enableImplInlayHints": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show inline implementation hints (← N impls) on types"
+        },
+        "smartReferences.enableTestFileDecoration": {
+          "type": "boolean",
+          "default": true,
+          "description": "Dim test files and show 'T' badge in native Explorer"
+        },
+        "smartReferences.symbolSearch.maxResultsPerCategory": {
+          "type": "number",
+          "default": 15,
+          "minimum": 5,
+          "maximum": 50,
+          "description": "Maximum number of symbols shown per category in Search Symbol"
+        },
+        "smartReferences.symbolSearch.debounceMs": {
+          "type": "number",
+          "default": 150,
+          "minimum": 50,
+          "maximum": 1000,
+          "description": "Debounce delay (ms) before executing symbol search"
+        },
+        "smartReferences.translation.skipProjectFiles": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, Alt+A translation is blocked on project/dependency config files (go.mod, package.json, *.sln, *.csproj, Cargo.toml, requirements.txt, etc.)"
+        },
+        "smartReferences.translation.provider": {
+          "type": "string",
+          "enum": ["google-free", "baidu", "deepl", "claude", "google"],
+          "enumDescriptions": [
+            "Google Translate (free, no API key required)",
+            "Baidu Translate (requires AppID + SecretKey, free tier: 5M chars/month)",
+            "DeepL translation API (free or pro tier, requires API key)",
+            "Claude API / Anthropic (requires API key)",
+            "Google Cloud Translation API (requires API key)"
+          ],
+          "default": "google-free",
+          "description": "Translation provider for Alt+A translate command"
+        },
+        "smartReferences.translation.baiduCredentials": {
+          "type": "string",
+          "default": "",
+          "description": "Baidu Translate credentials in 'AppID:SecretKey' format (申请地址: fanyi-api.baidu.com)"
+        },
+        "smartReferences.translation.deepLApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "DeepL API key (free keys end with :fx)"
+        },
+        "smartReferences.translation.claudeApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Anthropic Claude API key"
+        },
+        "smartReferences.translation.googleApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Google Cloud Translation API key"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "npm run compile && node tests/test-utils.js && node tests/test-dependencies.js && node tests/test-proto-symbols.js",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "^18.0.0",
+    "typescript": "^5.3.0"
+  }
+}
