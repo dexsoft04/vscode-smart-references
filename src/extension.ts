@@ -258,6 +258,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const editorChangeListener = vscode.window.onDidChangeActiveTextEditor(editor => {
     if (structureView.visible && editor) structureProvider.setDocument(editor.document);
     if (editor) void revealActiveProjectFile(editor.document.uri);
+    if (editor) scheduleRevealActiveReference(editor);
   });
   const docChangeListener = vscode.workspace.onDidChangeTextDocument(e => {
     if (structureView.visible && e.document === vscode.window.activeTextEditor?.document) {
@@ -267,6 +268,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const selectionChangeListener = vscode.window.onDidChangeTextEditorSelection(e => {
     if (structureView.visible && e.textEditor === vscode.window.activeTextEditor) {
       structureProvider.revealAtPosition(e.textEditor.selection.active);
+    }
+    if (e.textEditor === vscode.window.activeTextEditor) {
+      scheduleRevealActiveReference(e.textEditor);
     }
   });
 
@@ -322,6 +326,26 @@ export function activate(context: vscode.ExtensionContext): void {
   const treeView = vscode.window.createTreeView('smartReferencesTree', {
     treeDataProvider: treeProvider,
     showCollapseAll: true,
+  });
+  let refRevealTimer: ReturnType<typeof setTimeout> | undefined;
+  const revealActiveReference = async (editor?: vscode.TextEditor): Promise<void> => {
+    if (!treeView.visible) return;
+    const activeEditor = editor ?? vscode.window.activeTextEditor;
+    if (!activeEditor) return;
+    const target = treeProvider.getRevealTarget(activeEditor.document.uri, activeEditor.selection.active);
+    if (!target) return;
+    try {
+      await treeView.reveal(target, { select: false, focus: false, expand: true });
+    } catch (err) {
+      outputChannel.appendLine(`[references] reveal error: ${String(err)}`);
+    }
+  };
+  const scheduleRevealActiveReference = (editor?: vscode.TextEditor): void => {
+    if (refRevealTimer) clearTimeout(refRevealTimer);
+    refRevealTimer = setTimeout(() => { void revealActiveReference(editor); }, 120);
+  };
+  const treeVisibilityListener = treeView.onDidChangeVisibility(e => {
+    if (e.visible) scheduleRevealActiveReference();
   });
   const hierarchyView = vscode.window.createTreeView('typeHierarchyTree', {
     treeDataProvider: hierarchyProvider,
@@ -381,6 +405,7 @@ export function activate(context: vscode.ExtensionContext): void {
           treeProvider.setResults(symbolName, refs);
           treeView.title = treeProvider.getSymbolLabel();
           updateRefHistoryContext();
+          scheduleRevealActiveReference(vscode.window.activeTextEditor);
           await vscode.commands.executeCommand('smartReferencesTree.focus');
         } catch (err) {
           vscode.window.showErrorMessage(`IntelliJ-Style References error: ${String(err)}`);
@@ -469,11 +494,13 @@ export function activate(context: vscode.ExtensionContext): void {
     treeProvider.goBack();
     treeView.title = treeProvider.getSymbolLabel();
     updateRefHistoryContext();
+    scheduleRevealActiveReference();
   });
   const nextRefCmd = vscode.commands.registerCommand('smartReferences.nextResult', () => {
     treeProvider.goForward();
     treeView.title = treeProvider.getSymbolLabel();
     updateRefHistoryContext();
+    scheduleRevealActiveReference();
   });
   const prevImplCmd = vscode.commands.registerCommand('smartReferences.previousImpl', () => {
     hierarchyProvider.goBack();
@@ -553,6 +580,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!nextScope) return;
       treeProvider.setScopeFilter(nextScope);
       treeView.title = treeProvider.getSymbolLabel() || 'References';
+      scheduleRevealActiveReference();
     },
   );
   const setReferenceGroupingCmd = vscode.commands.registerCommand(
@@ -570,6 +598,7 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       if (!nextMode) return;
       treeProvider.setGroupingMode(nextMode);
+      scheduleRevealActiveReference();
     },
   );
 
@@ -717,6 +746,7 @@ export function activate(context: vscode.ExtensionContext): void {
     hierarchyProvider,
     structureProvider,
     structureView,
+    treeVisibilityListener,
     projectExplorerVisibilityListener,
     structureVisibilityListener,
     editorChangeListener,
@@ -794,6 +824,9 @@ export function activate(context: vscode.ExtensionContext): void {
     translationDocProvider,
     translationHoverProvider,
     translateCmd,
+    new vscode.Disposable(() => {
+      if (refRevealTimer) clearTimeout(refRevealTimer);
+    }),
   );
 }
 

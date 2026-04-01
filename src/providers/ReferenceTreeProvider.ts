@@ -252,6 +252,39 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
 
   getTreeItem(element: TreeNode): vscode.TreeItem { return element; }
 
+  getParent(element: TreeNode): TreeNode | undefined {
+    if (element instanceof CategoryGroupNode) return undefined;
+
+    if (element instanceof DirectoryNode) {
+      const category = this.buildCategoryGroupForRef(element.refs[0]);
+      return category ? new CategoryGroupNode(category) : undefined;
+    }
+
+    if (element instanceof FileNode) {
+      const category = this.buildCategoryGroupForRef(element.refs[0]);
+      if (!category) return undefined;
+      if (this.groupingMode === 'file') return new CategoryGroupNode(category);
+      const dirRefs = category.refs.filter(ref => this.getRelativeDir(ref.location.uri.fsPath) === this.getRelativeDir(element.uri.fsPath));
+      return new DirectoryNode(this.getRelativeDir(element.uri.fsPath), dirRefs, this.expandSubLevels);
+    }
+
+    if (element instanceof CallerNode) {
+      const fileRefs = this.refs.filter(ref => ref.location.uri.toString() === element.refs[0].location.uri.toString());
+      return this.createFileNodeForRefs(fileRefs);
+    }
+
+    return this.getParentForReference(element.ref);
+  }
+
+  getRevealTarget(uri: vscode.Uri, position?: vscode.Position): TreeNode | undefined {
+    const fileRefs = this.refs.filter(ref => ref.location.uri.toString() === uri.toString());
+    if (fileRefs.length === 0) return undefined;
+
+    const match = this.pickRevealReference(fileRefs, position);
+    if (match) return new ReferenceItem(match);
+    return this.createFileNodeForRefs(fileRefs);
+  }
+
   getChildren(element?: TreeNode): TreeNode[] | Thenable<TreeNode[]> {
     if (!element) {
       return buildCategoryGroups(this.refs).map(g => new CategoryGroupNode(g));
@@ -283,6 +316,63 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
   private getRelativeFilePath(fsPath: string): string {
     if (!this.workspaceRoot) return fsPath;
     return path.relative(this.workspaceRoot, fsPath) || path.basename(fsPath);
+  }
+
+  private getParentForReference(ref: ClassifiedReference): TreeNode | undefined {
+    const fileRefs = this.refs.filter(candidate => candidate.location.uri.toString() === ref.location.uri.toString());
+    if (fileRefs.length === 0) return undefined;
+    if (this.shouldSkipCallerLevel(fileRefs)) {
+      return this.createFileNodeForRefs(fileRefs);
+    }
+    const callerRefs = fileRefs
+      .filter(candidate => (candidate.containingSymbol ?? '') === (ref.containingSymbol ?? ''))
+      .sort((a, b) => a.location.range.start.line - b.location.range.start.line);
+    return new CallerNode(
+      ref.containingSymbol,
+      callerRefs,
+      this.expandSubLevels,
+    );
+  }
+
+  private createFileNodeForRefs(fileRefs: ClassifiedReference[]): FileNode {
+    return new FileNode(
+      fileRefs[0].location.uri,
+      fileRefs,
+      this.expandSubLevels,
+      this.groupingMode === 'file' ? this.getRelativeFilePath(fileRefs[0].location.uri.fsPath) : undefined,
+    );
+  }
+
+  private shouldSkipCallerLevel(refs: ClassifiedReference[]): boolean {
+    const symbols = new Set(refs.map(ref => ref.containingSymbol ?? ''));
+    return symbols.size === 1 && !refs[0].containingSymbol;
+  }
+
+  private buildCategoryGroupForRef(ref: ClassifiedReference): CategoryGroup | undefined {
+    for (const def of CATEGORY_DEFS) {
+      if (def.match(ref)) {
+        const refs = this.refs.filter(candidate => def.match(candidate));
+        return {
+          label: def.label,
+          icon: new vscode.ThemeIcon(def.icon, new vscode.ThemeColor(def.color)),
+          refs,
+          color: def.color,
+        };
+      }
+    }
+    return undefined;
+  }
+
+  private pickRevealReference(refs: ClassifiedReference[], position?: vscode.Position): ClassifiedReference | undefined {
+    if (!position) return refs[0];
+
+    const containing = refs.find(ref => ref.location.range.contains(position));
+    if (containing) return containing;
+
+    const sameLine = refs.find(ref => ref.location.range.start.line === position.line);
+    if (sameLine) return sameLine;
+
+    return refs[0];
   }
 
   private buildDirectoryNodes(refs: ClassifiedReference[]): TreeNode[] {
