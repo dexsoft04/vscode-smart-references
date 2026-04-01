@@ -176,6 +176,18 @@ export function activate(context: vscode.ExtensionContext): void {
     treeDataProvider: projectExplorer,
     showCollapseAll: true,
   });
+  const revealActiveProjectFile = async (uri?: vscode.Uri): Promise<void> => {
+    if (!projectExplorerView.visible) return;
+    const targetUri = uri ?? vscode.window.activeTextEditor?.document.uri;
+    if (!targetUri) return;
+    const target = projectExplorer.getRevealTarget(targetUri);
+    if (!target) return;
+    try {
+      await projectExplorerView.reveal(target, { select: false, focus: false, expand: true });
+    } catch (err) {
+      outputChannel.appendLine(`[project-explorer] reveal error: ${String(err)}`);
+    }
+  };
   // Title = workspace folder name + remote indicator (like native Explorer)
   const wsName = vscode.workspace.workspaceFolders?.[0]?.name;
   if (wsName) {
@@ -195,6 +207,12 @@ export function activate(context: vscode.ExtensionContext): void {
   projectExplorer.setVisible(projectExplorerView.visible);
   const projectExplorerVisibilityListener = projectExplorerView.onDidChangeVisibility(e => {
     projectExplorer.setVisible(e.visible);
+    if (e.visible) {
+      void (async () => {
+        await projectExplorer.refresh();
+        await revealActiveProjectFile();
+      })();
+    }
   });
 
   // Dim Unity .meta files in the file explorer
@@ -239,6 +257,7 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   const editorChangeListener = vscode.window.onDidChangeActiveTextEditor(editor => {
     if (structureView.visible && editor) structureProvider.setDocument(editor.document);
+    if (editor) void revealActiveProjectFile(editor.document.uri);
   });
   const docChangeListener = vscode.workspace.onDidChangeTextDocument(e => {
     if (structureView.visible && e.document === vscode.window.activeTextEditor?.document) {

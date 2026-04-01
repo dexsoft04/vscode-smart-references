@@ -174,6 +174,7 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
   private allIndex = new Map<string, DirEntry>();
   private ignoredIndex = new Map<string, DirEntry>();
   private ignoredDirs = new Set<string>();
+  private ignoredEntrySet = new Set<string>();
   private testFileSet = new Set<string>();
   private ignoredEntries: string[] = [];
   private hasSource = false;
@@ -230,6 +231,7 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
       const allTracked = trackedOutput.split('\n').filter(Boolean);
       this.ignoredEntries = ignoredOutput.split('\n').filter(Boolean);
       const ignoredTree = buildIgnoredTree(this.ignoredEntries);
+      this.ignoredEntrySet = new Set(this.ignoredEntries.map(entry => entry.replace(/\/$/, '')));
 
       const sourceFiles: string[] = [];
       const testFiles: string[] = [];
@@ -263,6 +265,7 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
       this.allIndex = new Map();
       this.ignoredIndex = new Map();
       this.ignoredDirs = new Set();
+      this.ignoredEntrySet = new Set();
       this.testFileSet = new Set();
       this.ignoredEntries = [];
       this.hasSource = false;
@@ -274,6 +277,25 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
 
   getTreeItem(element: ProjectNode): vscode.TreeItem {
     return element;
+  }
+
+  getParent(element: ProjectNode): ProjectNode | undefined {
+    if (element instanceof CategoryNode) return undefined;
+
+    if (element instanceof ProjDirectoryNode) {
+      return this.getParentForPath(element.dirPath, element.category);
+    }
+
+    return this.getParentForPath(element.relativePath, this.getCategoryForPath(element.relativePath));
+  }
+
+  getRevealTarget(uri: vscode.Uri): ProjectNode | undefined {
+    const relativePath = this.toRelativePath(uri);
+    if (!relativePath) return undefined;
+    const category = this.getCategoryForPath(relativePath);
+    if (!category) return undefined;
+    const isTest = this.viewMode === 'merged' && this.testFileSet.has(relativePath);
+    return new ProjFileNode(relativePath, this.workspaceRoot, isTest);
   }
 
   getChildren(element?: ProjectNode): ProjectNode[] {
@@ -372,6 +394,51 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
       if (slash === -1) return false;
       current = current.slice(0, slash);
     }
+  }
+
+  private toRelativePath(uri: vscode.Uri): string | undefined {
+    if (uri.scheme !== 'file' || !this.workspaceRoot) return undefined;
+    const relative = path.relative(this.workspaceRoot, uri.fsPath);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return undefined;
+    return relative.split(path.sep).join('/');
+  }
+
+  private getCategoryForPath(relativePath: string): ViewCategory | undefined {
+    if (this.isIgnoredPath(relativePath)) return 'ignored';
+    if (this.hasFile(this.allIndex, relativePath)) {
+      if (this.viewMode === 'merged') return 'all';
+      return this.testFileSet.has(relativePath) ? 'tests' : 'sources';
+    }
+    return undefined;
+  }
+
+  private getParentForPath(relativePath: string, category: ViewCategory | undefined): ProjectNode | undefined {
+    if (!category) return undefined;
+    const parentDir = path.posix.dirname(relativePath);
+    if (parentDir !== '.') {
+      return new ProjDirectoryNode(parentDir, category, this.workspaceRoot);
+    }
+    if (category === 'all') return undefined;
+    return this.createCategoryNode(category);
+  }
+
+  private createCategoryNode(category: 'sources' | 'tests' | 'ignored'): CategoryNode {
+    if (category === 'sources') return new CategoryNode('sources', 'Sources', 'file-code');
+    if (category === 'tests') return new CategoryNode('tests', 'Tests', 'beaker');
+    return new CategoryNode('ignored', 'Ignored', 'circle-slash');
+  }
+
+  private hasFile(index: Map<string, DirEntry>, relativePath: string): boolean {
+    const parentDir = path.posix.dirname(relativePath);
+    const fileName = path.posix.basename(relativePath);
+    const entry = index.get(parentDir === '.' ? '' : parentDir);
+    return !!entry?.files.includes(fileName);
+  }
+
+  private isIgnoredPath(relativePath: string): boolean {
+    if (this.ignoredEntrySet.has(relativePath)) return true;
+    const parentDir = path.posix.dirname(relativePath);
+    return parentDir !== '.' && this.isInsideIgnoredDir(parentDir);
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
