@@ -2,6 +2,7 @@
   "name": "vscode-intellij-style-references",
   "displayName": "IntelliJ-Style References",
   "description": "IntelliJ-style classified reference finder — groups by definition, implementation, read/write access, comments, and test files",
+  "icon": "images/icon.png",
   "version": "0.1.0",
   "publisher": "smart-references",
   "engines": {

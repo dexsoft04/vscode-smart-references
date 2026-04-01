@@ -11,6 +11,11 @@ interface DirEntry {
   files: string[];
 }
 
+interface IgnoredTree {
+  index: Map<string, DirEntry>;
+  ignoredDirs: Set<string>;
+}
+
 function buildDirIndex(files: string[]): Map<string, DirEntry> {
   const index = new Map<string, DirEntry>();
   const ensure = (dir: string) => {
@@ -40,6 +45,50 @@ function buildDirIndex(files: string[]): Map<string, DirEntry> {
     entry.files.sort();
   }
   return index;
+}
+
+function buildIgnoredTree(entries: string[]): IgnoredTree {
+  const index = new Map<string, DirEntry>();
+  const ignoredDirs = new Set<string>();
+  const ensure = (dir: string) => {
+    if (!index.has(dir)) index.set(dir, { subdirs: [], files: [] });
+    return index.get(dir)!;
+  };
+  const addSubdir = (parent: string, child: string) => {
+    const entry = ensure(parent);
+    if (!entry.subdirs.includes(child)) {
+      entry.subdirs.push(child);
+    }
+    ensure(child);
+  };
+
+  for (const rawEntry of entries) {
+    const clean = rawEntry.replace(/\/$/, '');
+    if (!clean) continue;
+
+    const parts = clean.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      const parent = i === 1 ? '' : parts.slice(0, i - 1).join('/');
+      const child = parts.slice(0, i).join('/');
+      addSubdir(parent, child);
+    }
+
+    const parentDir = parts.length === 1 ? '' : parts.slice(0, -1).join('/');
+    if (rawEntry.endsWith('/')) {
+      addSubdir(parentDir, clean);
+      ignoredDirs.add(clean);
+      continue;
+    }
+
+    ensure(parentDir).files.push(parts[parts.length - 1]);
+  }
+
+  for (const entry of index.values()) {
+    entry.subdirs.sort();
+    entry.files.sort();
+  }
+
+  return { index, ignoredDirs };
 }
 
 // ── Test file decoration ─────────────────────────────────────────────────────
@@ -123,6 +172,8 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
   private sourceIndex = new Map<string, DirEntry>();
   private testIndex = new Map<string, DirEntry>();
   private allIndex = new Map<string, DirEntry>();
+  private ignoredIndex = new Map<string, DirEntry>();
+  private ignoredDirs = new Set<string>();
   private testFileSet = new Set<string>();
   private ignoredEntries: string[] = [];
   private hasSource = false;
@@ -178,6 +229,7 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
 
       const allTracked = trackedOutput.split('\n').filter(Boolean);
       this.ignoredEntries = ignoredOutput.split('\n').filter(Boolean);
+      const ignoredTree = buildIgnoredTree(this.ignoredEntries);
 
       const sourceFiles: string[] = [];
       const testFiles: string[] = [];
@@ -195,6 +247,8 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
       this.sourceIndex = buildDirIndex(sourceFiles);
       this.testIndex = buildDirIndex(testFiles);
       this.allIndex = buildDirIndex(allTracked);
+      this.ignoredIndex = ignoredTree.index;
+      this.ignoredDirs = ignoredTree.ignoredDirs;
       this.hasSource = sourceFiles.length > 0;
       this.hasTest = testFiles.length > 0;
 
@@ -207,6 +261,8 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
       this.sourceIndex = new Map();
       this.testIndex = new Map();
       this.allIndex = new Map();
+      this.ignoredIndex = new Map();
+      this.ignoredDirs = new Set();
       this.testFileSet = new Set();
       this.ignoredEntries = [];
       this.hasSource = false;
@@ -237,13 +293,13 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
     }
 
     if (element instanceof CategoryNode) {
-      if (element.category === 'ignored') return this.buildIgnoredTopLevel();
+      if (element.category === 'ignored') return this.getIgnoredChildren('');
       const index = element.category === 'sources' ? this.sourceIndex : this.testIndex;
       return this.getFromIndex(index, '', element.category);
     }
 
     if (element instanceof ProjDirectoryNode) {
-      if (element.category === 'ignored') return this.readIgnoredDir(element.dirPath);
+      if (element.category === 'ignored') return this.getIgnoredChildren(element.dirPath);
       const index = element.category === 'all'
         ? this.allIndex
         : element.category === 'sources' ? this.sourceIndex : this.testIndex;
@@ -277,23 +333,18 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
     return nodes;
   }
 
-  private buildIgnoredTopLevel(): ProjectNode[] {
-    const nodes: ProjectNode[] = [];
-    for (const entry of this.ignoredEntries.sort()) {
-      const clean = entry.replace(/\/$/, '');
-      if (entry.endsWith('/')) {
-        nodes.push(new ProjDirectoryNode(clean, 'ignored', this.workspaceRoot));
-      } else {
-        nodes.push(new ProjFileNode(clean, this.workspaceRoot, false));
-      }
+  private getIgnoredChildren(dirPath: string): ProjectNode[] {
+    if (this.isInsideIgnoredDir(dirPath)) {
+      return this.readIgnoredDir(dirPath);
     }
-    return nodes;
+    return this.getFromIndex(this.ignoredIndex, dirPath, 'ignored');
   }
 
   private readIgnoredDir(dirRelative: string): ProjectNode[] {
     const fullPath = path.join(this.workspaceRoot, dirRelative);
     try {
-      const entries = fs.readdirSync(fullPath, { withFileTypes: true });
+      const entries = fs.readdirSync(fullPath, { withFileTypes: true })
+        .sort((a, b) => a.name.localeCompare(b.name));
       const dirs: ProjectNode[] = [];
       const files: ProjectNode[] = [];
       for (const e of entries) {
@@ -308,6 +359,18 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
       return [...dirs, ...files];
     } catch {
       return [];
+    }
+  }
+
+  private isInsideIgnoredDir(dirPath: string): boolean {
+    if (!dirPath) return false;
+
+    let current = dirPath;
+    while (true) {
+      if (this.ignoredDirs.has(current)) return true;
+      const slash = current.lastIndexOf('/');
+      if (slash === -1) return false;
+      current = current.slice(0, slash);
     }
   }
 
