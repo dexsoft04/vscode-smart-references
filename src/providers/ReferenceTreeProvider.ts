@@ -5,6 +5,7 @@ import { makeCategoryUri } from './CategoryDecorationProvider';
 import { extractDocComment } from './StructureTreeProvider';
 
 type TreeNode = CategoryGroupNode | DirectoryNode | FileNode | CallerNode | ReferenceItem;
+export type ReferenceScopeFilter = 'all' | 'production' | 'test';
 
 // ── Category group definition ─────────────────────────────────────────────────
 
@@ -170,9 +171,11 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
   private symbolName = '';
+  private allRefs: ClassifiedReference[] = [];
   private refs: ClassifiedReference[] = [];
   private expandSubLevels = true;
   private workspaceRoot?: string;
+  private scopeFilter: ReferenceScopeFilter = 'all';
 
   private history: HistoryEntry[] = [];
   private historyIndex = -1;
@@ -183,8 +186,8 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
 
   setResults(symbolName: string, refs: ClassifiedReference[]): void {
     this.symbolName = symbolName;
-    this.refs = refs;
-    this.expandSubLevels = refs.length <= AUTO_EXPAND_THRESHOLD;
+    this.allRefs = refs;
+    this.applyFilter();
     // Truncate forward history, push new entry
     this.history.splice(this.historyIndex + 1);
     this.history.push({ symbolName, refs });
@@ -211,15 +214,27 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
   private restoreFromHistory(): void {
     const entry = this.history[this.historyIndex];
     this.symbolName = entry.symbolName;
-    this.refs = entry.refs;
-    this.expandSubLevels = entry.refs.length <= AUTO_EXPAND_THRESHOLD;
+    this.allRefs = entry.refs;
+    this.applyFilter();
     this._onDidChangeTreeData.fire();
   }
 
   clear(): void {
     this.symbolName = '';
+    this.allRefs = [];
     this.refs = [];
     this._onDidChangeTreeData.fire();
+  }
+
+  setScopeFilter(filter: ReferenceScopeFilter): void {
+    if (this.scopeFilter === filter) return;
+    this.scopeFilter = filter;
+    this.applyFilter();
+    this._onDidChangeTreeData.fire();
+  }
+
+  getScopeFilter(): ReferenceScopeFilter {
+    return this.scopeFilter;
   }
 
   getTreeItem(element: TreeNode): vscode.TreeItem { return element; }
@@ -319,7 +334,20 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
   }
 
   getSymbolLabel(): string {
-    return this.symbolName ? `${this.symbolName} (${this.refs.length} usages)` : '';
+    if (!this.symbolName) return '';
+    const suffix = this.scopeFilter === 'all'
+      ? 'All'
+      : this.scopeFilter === 'production' ? 'Production' : 'Tests';
+    return `${this.symbolName} (${this.refs.length} usages · ${suffix})`;
+  }
+
+  private applyFilter(): void {
+    this.refs = this.allRefs.filter(ref => {
+      if (this.scopeFilter === 'all') return true;
+      if (this.scopeFilter === 'production') return ref.context === CodeContext.Production;
+      return ref.context === CodeContext.Test;
+    });
+    this.expandSubLevels = this.refs.length <= AUTO_EXPAND_THRESHOLD;
   }
 
   dispose(): void {

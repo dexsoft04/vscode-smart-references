@@ -97,6 +97,11 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "smartReferences.setReferenceScope",
+        "title": "Filter References",
+        "icon": "$(filter)"
+      },
+      {
         "command": "smartReferences.toggleProjectViewMode",
         "title": "Toggle Categorized / Merged View",
         "icon": "$(group-by-ref-type)"
@@ -240,6 +245,11 @@
         },
         {
           "command": "smartReferences.nextResult",
+          "when": "view == smartReferencesTree",
+          "group": "navigation"
+        },
+        {
+          "command": "smartReferences.setReferenceScope",
           "when": "view == smartReferencesTree",
           "group": "navigation"
         },

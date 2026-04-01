@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { ReferenceTreeProvider } from './providers/ReferenceTreeProvider';
+import { ReferenceTreeProvider, ReferenceScopeFilter } from './providers/ReferenceTreeProvider';
 import { ReferenceLensProvider } from './providers/ReferenceLensProvider';
 import { ReferenceClassifier } from './core/ReferenceClassifier';
 import { ReferenceCache } from './core/Cache';
@@ -517,6 +517,25 @@ export function activate(context: vscode.ExtensionContext): void {
     'smartReferences.toggleProjectViewMode',
     () => projectExplorer.toggleViewMode(),
   );
+  const setReferenceScopeCmd = vscode.commands.registerCommand(
+    'smartReferences.setReferenceScope',
+    async (scope?: ReferenceScopeFilter) => {
+      let nextScope = scope;
+      if (!nextScope) {
+        const picked = await vscode.window.showQuickPick([
+          { label: 'All', description: '显示全部引用', value: 'all' as const },
+          { label: 'Production', description: '仅显示生产代码引用', value: 'production' as const },
+          { label: 'Tests', description: '仅显示测试代码引用', value: 'test' as const },
+        ], {
+          placeHolder: 'Filter reference results',
+        });
+        nextScope = picked?.value;
+      }
+      if (!nextScope) return;
+      treeProvider.setScopeFilter(nextScope);
+      treeView.title = treeProvider.getSymbolLabel() || 'References';
+    },
+  );
 
   // Context menu commands for Project Explorer
   const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
@@ -719,6 +738,7 @@ export function activate(context: vscode.ExtensionContext): void {
     nativeTestDecor,
     refreshProjectCmd,
     toggleProjectViewCmd,
+    setReferenceScopeCmd,
     revealInOSCmd,
     openTerminalCmd,
     openToSideCmd,
