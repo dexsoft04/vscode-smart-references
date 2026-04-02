@@ -12,7 +12,9 @@
     "Programming Languages",
     "Other"
   ],
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -165,6 +167,16 @@
         "command": "smartReferences.translate",
         "title": "Translate to Chinese",
         "category": "Smart References"
+      },
+      {
+        "command": "smartReferences.searchText",
+        "title": "Layered Text Search",
+        "icon": "$(search)"
+      },
+      {
+        "command": "smartReferences.refreshTextSearch",
+        "title": "Refresh Text Search",
+        "icon": "$(refresh)"
       }
     ],
     "keybindings": [
@@ -206,34 +218,127 @@
     ],
     "menus": {
       "commandPalette": [
-        { "command": "smartReferences.goToImplementation", "when": "false" },
-        { "command": "smartReferences.openToSide", "when": "false" },
-        { "command": "smartReferences.revealInOS", "when": "false" },
-        { "command": "smartReferences.openTerminalHere", "when": "false" },
-        { "command": "smartReferences.findInFolder", "when": "false" },
-        { "command": "smartReferences.newFile", "when": "false" },
-        { "command": "smartReferences.newFolder", "when": "false" },
-        { "command": "smartReferences.renameFile", "when": "false" },
-        { "command": "smartReferences.deleteFile", "when": "false" },
-        { "command": "smartReferences.copyPath", "when": "false" },
-        { "command": "smartReferences.copyRelativePath", "when": "false" }
+        {
+          "command": "smartReferences.goToImplementation",
+          "when": "false"
+        },
+        {
+          "command": "smartReferences.openToSide",
+          "when": "false"
+        },
+        {
+          "command": "smartReferences.revealInOS",
+          "when": "false"
+        },
+        {
+          "command": "smartReferences.openTerminalHere",
+          "when": "false"
+        },
+        {
+          "command": "smartReferences.findInFolder",
+          "when": "false"
+        },
+        {
+          "command": "smartReferences.newFile",
+          "when": "false"
+        },
+        {
+          "command": "smartReferences.newFolder",
+          "when": "false"
+        },
+        {
+          "command": "smartReferences.renameFile",
+          "when": "false"
+        },
+        {
+          "command": "smartReferences.deleteFile",
+          "when": "false"
+        },
+        {
+          "command": "smartReferences.copyPath",
+          "when": "false"
+        },
+        {
+          "command": "smartReferences.copyRelativePath",
+          "when": "false"
+        }
       ],
       "view/item/context": [
-        { "command": "smartReferences.openToSide", "when": "view == projectExplorer && viewItem == projectFile", "group": "navigation@1" },
-        { "command": "smartReferences.revealInOS", "when": "view == projectExplorer && viewItem == projectFile", "group": "navigation@2" },
-        { "command": "smartReferences.revealInOS", "when": "view == projectExplorer && viewItem == projectDir", "group": "navigation@2" },
-        { "command": "smartReferences.openTerminalHere", "when": "view == projectExplorer && viewItem == projectDir", "group": "navigation@3" },
-        { "command": "smartReferences.newFile", "when": "view == projectExplorer && viewItem == projectDir", "group": "2_workspace@1" },
-        { "command": "smartReferences.newFolder", "when": "view == projectExplorer && viewItem == projectDir", "group": "2_workspace@2" },
-        { "command": "smartReferences.findInFolder", "when": "view == projectExplorer && viewItem == projectDir", "group": "4_search@1" },
-        { "command": "smartReferences.copyPath", "when": "view == projectExplorer && viewItem == projectFile", "group": "6_copypath@1" },
-        { "command": "smartReferences.copyPath", "when": "view == projectExplorer && viewItem == projectDir", "group": "6_copypath@1" },
-        { "command": "smartReferences.copyRelativePath", "when": "view == projectExplorer && viewItem == projectFile", "group": "6_copypath@2" },
-        { "command": "smartReferences.copyRelativePath", "when": "view == projectExplorer && viewItem == projectDir", "group": "6_copypath@2" },
-        { "command": "smartReferences.renameFile", "when": "view == projectExplorer && viewItem == projectFile", "group": "7_modification@1" },
-        { "command": "smartReferences.renameFile", "when": "view == projectExplorer && viewItem == projectDir", "group": "7_modification@1" },
-        { "command": "smartReferences.deleteFile", "when": "view == projectExplorer && viewItem == projectFile", "group": "7_modification@2" },
-        { "command": "smartReferences.deleteFile", "when": "view == projectExplorer && viewItem == projectDir", "group": "7_modification@2" }
+        {
+          "command": "smartReferences.openToSide",
+          "when": "view == projectExplorer && viewItem == projectFile",
+          "group": "navigation@1"
+        },
+        {
+          "command": "smartReferences.revealInOS",
+          "when": "view == projectExplorer && viewItem == projectFile",
+          "group": "navigation@2"
+        },
+        {
+          "command": "smartReferences.revealInOS",
+          "when": "view == projectExplorer && viewItem == projectDir",
+          "group": "navigation@2"
+        },
+        {
+          "command": "smartReferences.openTerminalHere",
+          "when": "view == projectExplorer && viewItem == projectDir",
+          "group": "navigation@3"
+        },
+        {
+          "command": "smartReferences.newFile",
+          "when": "view == projectExplorer && viewItem == projectDir",
+          "group": "2_workspace@1"
+        },
+        {
+          "command": "smartReferences.newFolder",
+          "when": "view == projectExplorer && viewItem == projectDir",
+          "group": "2_workspace@2"
+        },
+        {
+          "command": "smartReferences.findInFolder",
+          "when": "view == projectExplorer && viewItem == projectDir",
+          "group": "4_search@1"
+        },
+        {
+          "command": "smartReferences.copyPath",
+          "when": "view == projectExplorer && viewItem == projectFile",
+          "group": "6_copypath@1"
+        },
+        {
+          "command": "smartReferences.copyPath",
+          "when": "view == projectExplorer && viewItem == projectDir",
+          "group": "6_copypath@1"
+        },
+        {
+          "command": "smartReferences.copyRelativePath",
+          "when": "view == projectExplorer && viewItem == projectFile",
+          "group": "6_copypath@2"
+        },
+        {
+          "command": "smartReferences.copyRelativePath",
+          "when": "view == projectExplorer && viewItem == projectDir",
+          "group": "6_copypath@2"
+        },
+        {
+          "command": "smartReferences.renameFile",
+          "when": "view == projectExplorer && viewItem == projectFile",
+          "group": "7_modification@1"
+        },
+        {
+          "command": "smartReferences.renameFile",
+          "when": "view == projectExplorer && viewItem == projectDir",
+          "group": "7_modification@1"
+        },
+        {
+          "command": "smartReferences.deleteFile",
+          "when": "view == projectExplorer && viewItem == projectFile",
+          "group": "7_modification@2"
+        },
+        {
+          "command": "smartReferences.deleteFile",
+          "when": "view == projectExplorer && viewItem == projectDir",
+          "group": "7_modification@2"
+        }
       ],
       "editor/context": [
         {
@@ -317,6 +422,16 @@
           "command": "smartReferences.refreshProjectExplorer",
           "when": "view == projectExplorer",
           "group": "navigation"
+        },
+        {
+          "command": "smartReferences.searchText",
+          "when": "view == textSearchTree",
+          "group": "navigation"
+        },
+        {
+          "command": "smartReferences.refreshTextSearch",
+          "when": "view == textSearchTree",
+          "group": "navigation"
         }
       ]
     },
@@ -325,6 +440,13 @@
         {
           "id": "smartReferences",
           "title": "IntelliJ-Style References",
+          "icon": "images/icon.svg"
+        }
+      ],
+      "panel": [
+        {
+          "id": "smartReferencesSearchPanel",
+          "title": "Layered Search",
           "icon": "images/icon.svg"
         }
       ]
@@ -353,6 +475,12 @@
           "id": "projectExplorer",
           "name": "Project Files"
         }
+      ],
+      "smartReferencesSearchPanel": [
+        {
+          "id": "textSearchTree",
+          "name": "Text Search"
+        }
       ]
     },
     "viewsWelcome": [
@@ -375,6 +503,10 @@
       {
         "view": "projectExplorer",
         "contents": "No git repository found in workspace.\n\nThis view requires a git repository to categorize files."
+      },
+      {
+        "view": "textSearchTree",
+        "contents": "No text search loaded yet.\n\nRun [Layered Text Search](command:smartReferences.searchText) to search with a directory tree."
       }
     ],
     "colors": [
@@ -456,7 +588,13 @@
         },
         "smartReferences.translation.provider": {
           "type": "string",
-          "enum": ["google-free", "baidu", "deepl", "claude", "google"],
+          "enum": [
+            "google-free",
+            "baidu",
+            "deepl",
+            "claude",
+            "google"
+          ],
           "enumDescriptions": [
             "Google Translate (free, no API key required)",
             "Baidu Translate (requires AppID + SecretKey, free tier: 5M chars/month)",

@@ -535,6 +535,78 @@ group('Workspace source filtering — excludes declarations and generated dirs',
   );
 });
 
+// ── Text search tree layering tests ─────────────────────────────────────────
+
+function listChildDirectories(matches, parentDirPath) {
+  const buckets = new Map();
+  for (const match of matches) {
+    if (!match.directoryPath) continue;
+    if (parentDirPath) {
+      if (match.directoryPath === parentDirPath || !match.directoryPath.startsWith(parentDirPath + '/')) continue;
+      const remainder = match.directoryPath.slice(parentDirPath.length + 1);
+      const childName = remainder.split('/')[0];
+      const childPath = `${parentDirPath}/${childName}`;
+      const bucket = buckets.get(childPath) || [];
+      bucket.push(match);
+      buckets.set(childPath, bucket);
+      continue;
+    }
+    const childName = match.directoryPath.split('/')[0];
+    const childPath = childName;
+    const bucket = buckets.get(childPath) || [];
+    bucket.push(match);
+    buckets.set(childPath, bucket);
+  }
+  return [...buckets.entries()]
+    .map(([fullPath, bucketMatches]) => ({ fullPath, matches: bucketMatches }))
+    .sort((a, b) => a.fullPath.localeCompare(b.fullPath));
+}
+
+function listFilesAtDirectory(matches, directoryPath) {
+  const buckets = new Map();
+  for (const match of matches) {
+    if (match.directoryPath !== directoryPath) continue;
+    const bucket = buckets.get(match.relativePath) || [];
+    bucket.push(match);
+    buckets.set(match.relativePath, bucket);
+  }
+  return [...buckets.keys()].sort();
+}
+
+group('Text search tree layering — root only shows first-level directories', () => {
+  const matches = [
+    { relativePath: 'assets/lobby/main/PhoneLogin.ts', directoryPath: 'assets/lobby/main' },
+    { relativePath: 'assets/lobby/main/SessionPop.ts', directoryPath: 'assets/lobby/main' },
+    { relativePath: 'assets/core/App.ts', directoryPath: 'assets/core' },
+  ];
+  const rootDirs = listChildDirectories(matches, '');
+  assert(rootDirs.length === 1 && rootDirs[0].fullPath === 'assets', 'root collapses nested matches into first-level assets directory');
+});
+
+group('Text search tree layering — child directory expands one level at a time', () => {
+  const matches = [
+    { relativePath: 'assets/lobby/main/PhoneLogin.ts', directoryPath: 'assets/lobby/main' },
+    { relativePath: 'assets/lobby/start/Login.ts', directoryPath: 'assets/lobby/start' },
+    { relativePath: 'assets/core/App.ts', directoryPath: 'assets/core' },
+  ];
+  const assetChildren = listChildDirectories(matches, 'assets');
+  assert(assetChildren.length === 2, 'assets has two direct child directories');
+  assert(assetChildren[0].fullPath === 'assets/core', 'first child is assets/core');
+  assert(assetChildren[1].fullPath === 'assets/lobby', 'second child is assets/lobby');
+});
+
+group('Text search tree layering — files stay under their exact directory', () => {
+  const matches = [
+    { relativePath: 'assets/lobby/main/PhoneLogin.ts', directoryPath: 'assets/lobby/main' },
+    { relativePath: 'assets/lobby/main/PhoneLogin.ts', directoryPath: 'assets/lobby/main' },
+    { relativePath: 'assets/lobby/main/SessionPop.ts', directoryPath: 'assets/lobby/main' },
+  ];
+  const files = listFilesAtDirectory(matches, 'assets/lobby/main');
+  assert(files.length === 2, 'deduplicates files within one directory');
+  assert(files[0] === 'assets/lobby/main/PhoneLogin.ts', 'includes PhoneLogin.ts');
+  assert(files[1] === 'assets/lobby/main/SessionPop.ts', 'includes SessionPop.ts');
+});
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 
 console.log(`\n${'─'.repeat(40)}`);

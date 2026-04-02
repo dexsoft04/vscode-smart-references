@@ -6,6 +6,7 @@ import { ReferenceClassifier } from './core/ReferenceClassifier';
 import { ReferenceCache } from './core/Cache';
 import { TestFileDetector } from './analyzers/TestFileDetector';
 import { ReferencePreviewManager } from './providers/ReferencePreviewManager';
+import { TextSearchTreeProvider } from './providers/TextSearchTreeProvider';
 import { TypeHierarchyTreeProvider } from './providers/TypeHierarchyTreeProvider';
 import { CategoryDecorationProvider } from './providers/CategoryDecorationProvider';
 import { SymbolSearchProvider } from './providers/SymbolSearchProvider';
@@ -43,6 +44,7 @@ export function activate(context: vscode.ExtensionContext): void {
   treeProvider.setActiveDocument(vscode.window.activeTextEditor?.document.uri);
   const lensProvider = new ReferenceLensProvider(testDetector);
   const previewer = new ReferencePreviewManager();
+  const textSearchProvider = new TextSearchTreeProvider();
 
   const hierarchyProvider = new TypeHierarchyTreeProvider(testDetector);
   const symbolSearch = new SymbolSearchProvider(previewer, testDetector, outputChannel, protoNavigator);
@@ -354,6 +356,14 @@ export function activate(context: vscode.ExtensionContext): void {
     treeDataProvider: hierarchyProvider,
     showCollapseAll: true,
   });
+  const textSearchView = vscode.window.createTreeView('textSearchTree', {
+    treeDataProvider: textSearchProvider,
+    showCollapseAll: true,
+  });
+  const refreshTextSearchTitle = (): void => {
+    textSearchView.title = textSearchProvider.getTitle();
+  };
+  refreshTextSearchTitle();
 
   // Register CodeLens
   const lensRegistration = vscode.languages.registerCodeLensProvider(
@@ -532,6 +542,68 @@ export function activate(context: vscode.ExtensionContext): void {
   const searchTypeCmd = vscode.commands.registerCommand(
     'smartReferences.searchType',
     () => symbolSearch.show([SymbolCategory.Class, SymbolCategory.Interface, SymbolCategory.Enum]),
+  );
+  const searchTextCmd = vscode.commands.registerCommand(
+    'smartReferences.searchText',
+    async () => {
+      const editor = vscode.window.activeTextEditor;
+      const selectedText = editor && !editor.selection.isEmpty
+        ? editor.document.getText(editor.selection).trim()
+        : '';
+      const query = await vscode.window.showInputBox({
+        prompt: 'Layered text search',
+        placeHolder: 'Search workspace text and show results as a directory tree',
+        value: selectedText || textSearchProvider.getQuery(),
+      });
+      if (query === undefined) return;
+
+      const normalized = query.trim();
+      await vscode.commands.executeCommand('textSearchTree.focus');
+      if (!normalized) {
+        textSearchProvider.clear();
+        refreshTextSearchTitle();
+        return;
+      }
+
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Window,
+          title: `Layered Text Search: ${normalized}`,
+        },
+        async () => {
+          try {
+            await textSearchProvider.search(normalized);
+            refreshTextSearchTitle();
+            if (!textSearchProvider.hasResults()) {
+              vscode.window.showInformationMessage(`No text matches found for "${normalized}"`);
+            }
+          } catch (err) {
+            const message = String(err);
+            if (message.includes('ENOENT')) {
+              vscode.window.showErrorMessage('Layered Text Search requires ripgrep (`rg`) in PATH.');
+            } else {
+              vscode.window.showErrorMessage(`Layered Text Search error: ${message}`);
+            }
+          }
+        },
+      );
+    },
+  );
+  const refreshTextSearchCmd = vscode.commands.registerCommand(
+    'smartReferences.refreshTextSearch',
+    async () => {
+      await vscode.commands.executeCommand('textSearchTree.focus');
+      if (!textSearchProvider.getQuery()) {
+        await vscode.commands.executeCommand('smartReferences.searchText');
+        return;
+      }
+      try {
+        await textSearchProvider.refresh();
+        refreshTextSearchTitle();
+      } catch (err) {
+        vscode.window.showErrorMessage(`Layered Text Search error: ${String(err)}`);
+      }
+    },
   );
 
   // Dependency commands
@@ -845,6 +917,8 @@ export function activate(context: vscode.ExtensionContext): void {
     decorationProvider,
     treeView,
     hierarchyView,
+    textSearchProvider,
+    textSearchView,
     depTreeView,
     depVisibilityListener,
     depProvider,
@@ -883,6 +957,8 @@ export function activate(context: vscode.ExtensionContext): void {
     searchAllCmd,
     searchFunctionCmd,
     searchTypeCmd,
+    searchTextCmd,
+    refreshTextSearchCmd,
     refreshDepsCmd,
     searchDepsCmd,
     searchDepSymbolsCmd,
