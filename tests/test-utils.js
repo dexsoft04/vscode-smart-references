@@ -428,6 +428,58 @@ group('Search Type filtering — strict type definitions only', () => {
   assert(!matchesActiveCategories(SymbolKind.Constant, cats), 'excludes constant');
 });
 
+// ── TS/JS enum reference classification tests ───────────────────────────────
+
+function isTypeLikeContainer(kind) {
+  return kind === 'Class' || kind === 'Interface' || kind === 'Struct';
+}
+
+function isInFieldTypeAnnotation(ref, allSymbols) {
+  const pos = ref.location.range.start;
+  const line = ref.lineText;
+  for (const { symbol: sym, parents } of allSymbols) {
+    if ((sym.kind === 'Field' || sym.kind === 'Property')
+      && sym.range.start <= pos && pos <= sym.range.end) {
+      if (!parents.some(parent => isTypeLikeContainer(parent.kind))) continue;
+      const eqIdx = line.indexOf('=', sym.selectionRange.endCharacter);
+      if (eqIdx === -1 || pos.character < eqIdx) return true;
+    }
+  }
+  return false;
+}
+
+group('Field declaration classification — exclude object literal property values', () => {
+  const ref = {
+    lineText: '  AdsResultCode: EAdsResult.RESULT_CODE_REWARTVIDEO_CANCEL,',
+    location: { range: { start: { character: 29 } } },
+  };
+  const objectLiteralProperty = {
+    symbol: {
+      kind: 'Property',
+      range: { start: { character: 2 }, end: { character: 65 } },
+      selectionRange: { endCharacter: 15 },
+    },
+    parents: [{ kind: 'Method' }],
+  };
+  assert(!isInFieldTypeAnnotation(ref, [objectLiteralProperty]), 'object literal enum value stays a reference');
+});
+
+group('Field declaration classification — keep real class field type annotations', () => {
+  const ref = {
+    lineText: '  resultCode: EAdsResult = EAdsResult.RESULT_CODE_REWARTVIDEO_CANCEL;',
+    location: { range: { start: { character: 14 } } },
+  };
+  const classField = {
+    symbol: {
+      kind: 'Property',
+      range: { start: { character: 2 }, end: { character: 66 } },
+      selectionRange: { endCharacter: 12 },
+    },
+    parents: [{ kind: 'Class' }],
+  };
+  assert(isInFieldTypeAnnotation(ref, [classField]), 'class field type annotation remains declaration');
+});
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 
 console.log(`\n${'─'.repeat(40)}`);

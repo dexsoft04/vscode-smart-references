@@ -34,28 +34,47 @@ function isReturnType(lineText: string, refStart: number, refEnd: number): boole
   return false;
 }
 
-function flattenSymbols(symbols: vscode.DocumentSymbol[]): vscode.DocumentSymbol[] {
-  const result: vscode.DocumentSymbol[] = [];
+interface FlattenedSymbol {
+  symbol: vscode.DocumentSymbol;
+  parents: vscode.DocumentSymbol[];
+}
+
+function flattenSymbols(
+  symbols: vscode.DocumentSymbol[],
+  parents: vscode.DocumentSymbol[] = [],
+): FlattenedSymbol[] {
+  const result: FlattenedSymbol[] = [];
   for (const sym of symbols) {
-    result.push(sym);
+    result.push({ symbol: sym, parents });
     if (sym.children.length > 0) {
-      result.push(...flattenSymbols(sym.children));
+      result.push(...flattenSymbols(sym.children, [...parents, sym]));
     }
   }
   return result;
 }
 
+function isTypeLikeContainer(kind: vscode.SymbolKind): boolean {
+  return kind === vscode.SymbolKind.Class
+    || kind === vscode.SymbolKind.Interface
+    || kind === vscode.SymbolKind.Struct;
+}
+
 function isInFieldTypeAnnotation(
   ref: ClassifiedReference,
-  allSymbols: vscode.DocumentSymbol[],
+  allSymbols: FlattenedSymbol[],
 ): boolean {
   const pos = ref.location.range.start;
   const line = ref.lineText;
-  for (const sym of allSymbols) {
+  for (const { symbol: sym, parents } of allSymbols) {
     if (
       (sym.kind === vscode.SymbolKind.Field || sym.kind === vscode.SymbolKind.Property) &&
       sym.range.contains(pos)
     ) {
+      // TS/JS object literal properties also surface as Property symbols.
+      // Only treat them as declarations when nested under a real type container.
+      if (!parents.some(parent => isTypeLikeContainer(parent.kind))) {
+        continue;
+      }
       // Only classify as FieldDeclaration if ref is in the type portion (before `=`)
       const eqIdx = line.indexOf('=', sym.selectionRange.end.character);
       if (eqIdx === -1 || pos.character < eqIdx) return true;
@@ -69,7 +88,7 @@ export function classifyUsageType(
   symbolsByFile: Map<string, vscode.DocumentSymbol[]>,
 ): void {
   // Pre-flatten symbols per file to avoid recomputing per reference
-  const flatCache = new Map<string, vscode.DocumentSymbol[]>();
+  const flatCache = new Map<string, FlattenedSymbol[]>();
   for (const [key, syms] of symbolsByFile) {
     flatCache.set(key, flattenSymbols(syms));
   }
