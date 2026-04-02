@@ -537,7 +537,10 @@ export function activate(context: vscode.ExtensionContext): void {
   // Dependency commands
   const refreshStructureCmd = vscode.commands.registerCommand(
     'smartReferences.refreshStructure',
-    () => structureProvider.refresh(),
+    async () => {
+      await vscode.commands.executeCommand('structureTree.focus');
+      return structureProvider.refresh();
+    },
   );
   const showStructureCmd = vscode.commands.registerCommand(
     'smartReferences.showStructure',
@@ -550,11 +553,17 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const refreshDepsCmd = vscode.commands.registerCommand(
     'smartReferences.refreshDeps',
-    () => depProvider.refresh(),
+    async () => {
+      await vscode.commands.executeCommand('dependencyTree.focus');
+      return depProvider.refresh();
+    },
   );
   const searchDepsCmd = vscode.commands.registerCommand(
     'smartReferences.searchDeps',
-    () => depProvider.searchAndOpen(),
+    async () => {
+      await vscode.commands.executeCommand('dependencyTree.focus');
+      return depProvider.searchAndOpen();
+    },
   );
   const searchDepSymbolsCmd = vscode.commands.registerCommand(
     'smartReferences.searchDependencySymbols',
@@ -564,11 +573,17 @@ export function activate(context: vscode.ExtensionContext): void {
   // Project explorer commands
   const refreshProjectCmd = vscode.commands.registerCommand(
     'smartReferences.refreshProjectExplorer',
-    () => projectExplorer.refresh(true),
+    async () => {
+      await vscode.commands.executeCommand('projectExplorer.focus');
+      return projectExplorer.refresh(true);
+    },
   );
   const toggleProjectViewCmd = vscode.commands.registerCommand(
     'smartReferences.toggleProjectViewMode',
-    () => projectExplorer.toggleViewMode(),
+    async () => {
+      await vscode.commands.executeCommand('projectExplorer.focus');
+      projectExplorer.toggleViewMode();
+    },
   );
   const setReferenceScopeCmd = vscode.commands.registerCommand(
     'smartReferences.setReferenceScope',
