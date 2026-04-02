@@ -535,6 +535,40 @@ group('Workspace source filtering — excludes declarations and generated dirs',
   );
 });
 
+// ── Reference scope anchor tests ────────────────────────────────────────────
+
+function filterByScopeAnchor(refs, scopeFilter, anchorPath) {
+  if (scopeFilter === 'currentFile') {
+    return refs.filter(ref => ref.path === anchorPath);
+  }
+  if (scopeFilter === 'currentDirectory') {
+    const anchorDir = anchorPath.split('/').slice(0, -1).join('/');
+    return refs.filter(ref => ref.path.split('/').slice(0, -1).join('/') === anchorDir);
+  }
+  return refs;
+}
+
+group('Reference scope anchor — current file stays anchored to query file', () => {
+  const refs = [
+    { path: 'src/query.ts' },
+    { path: 'src/other.ts' },
+  ];
+  const filtered = filterByScopeAnchor(refs, 'currentFile', 'src/query.ts');
+  assert(filtered.length === 1, 'only keeps the query file');
+  assert(filtered[0].path === 'src/query.ts', 'keeps query file reference even after browsing elsewhere');
+});
+
+group('Reference scope anchor — current directory stays anchored to query directory', () => {
+  const refs = [
+    { path: 'src/query.ts' },
+    { path: 'src/other.ts' },
+    { path: 'test/query.test.ts' },
+  ];
+  const filtered = filterByScopeAnchor(refs, 'currentDirectory', 'src/query.ts');
+  assert(filtered.length === 2, 'keeps only references under the query directory');
+  assert(filtered.every(ref => ref.path.startsWith('src/')), 'all results stay in src directory');
+});
+
 // ── Text search tree layering tests ─────────────────────────────────────────
 
 function listChildDirectories(matches, parentDirPath) {

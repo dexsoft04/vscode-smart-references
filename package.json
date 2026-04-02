@@ -197,7 +197,7 @@
       },
       {
         "command": "smartReferences.searchFunction",
-        "key": "ctrl+shift+n",
+        "key": "ctrl+shift+t",
         "when": "editorTextFocus"
       },
       {

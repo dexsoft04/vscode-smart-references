@@ -41,7 +41,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const protoNavigator = new ProtoWorkspaceNavigator(outputChannel);
   const classifier = new ReferenceClassifier(testDetector, cache, protoNavigator);
   const treeProvider = new ReferenceTreeProvider();
-  treeProvider.setActiveDocument(vscode.window.activeTextEditor?.document.uri);
+  treeProvider.setScopeAnchor(vscode.window.activeTextEditor?.document.uri);
   const lensProvider = new ReferenceLensProvider(testDetector);
   const previewer = new ReferencePreviewManager();
   const textSearchProvider = new TextSearchTreeProvider();
@@ -259,7 +259,6 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
   const editorChangeListener = vscode.window.onDidChangeActiveTextEditor(editor => {
-    treeProvider.setActiveDocument(editor?.document.uri);
     refreshReferenceTitle();
     if (structureView.visible && editor) structureProvider.setDocument(editor.document);
     if (editor) void revealActiveProjectFile(editor.document.uri);
@@ -401,7 +400,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   async function runFind(uri: vscode.Uri, position: vscode.Position): Promise<void> {
-    treeProvider.setActiveDocument(uri);
+    treeProvider.setScopeAnchor(uri);
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Window,
@@ -416,7 +415,7 @@ export function activate(context: vscode.ExtensionContext): void {
             refreshReferenceTitle();
             return;
           }
-          treeProvider.setResults(symbolName, refs);
+          treeProvider.setResults(symbolName, refs, uri);
           refreshReferenceTitle();
           updateRefHistoryContext();
           scheduleRevealActiveReference(vscode.window.activeTextEditor);
@@ -666,8 +665,8 @@ export function activate(context: vscode.ExtensionContext): void {
           { label: 'All', description: '显示全部引用', value: 'all' as const },
           { label: 'Production', description: '仅显示生产代码引用', value: 'production' as const },
           { label: 'Tests', description: '仅显示测试代码引用', value: 'test' as const },
-          { label: 'Current File', description: '仅显示当前文件中的引用', value: 'currentFile' as const },
-          { label: 'Current Directory', description: '仅显示当前目录中的引用', value: 'currentDirectory' as const },
+          { label: 'Current File', description: '仅显示发起查询文件中的引用', value: 'currentFile' as const },
+          { label: 'Current Directory', description: '仅显示发起查询目录中的引用', value: 'currentDirectory' as const },
           { label: 'Workspace Source', description: '仅显示工作区源码，排除 .d.ts 和生成目录', value: 'workspaceSource' as const },
         ], {
           placeHolder: 'Filter reference results',

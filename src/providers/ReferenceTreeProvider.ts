@@ -173,6 +173,7 @@ const AUTO_EXPAND_THRESHOLD = 20;
 interface HistoryEntry {
   symbolName: string;
   refs: ClassifiedReference[];
+  anchorUri?: vscode.Uri;
 }
 
 export interface PinnedReferenceResult {
@@ -182,6 +183,7 @@ export interface PinnedReferenceResult {
   scopeFilter: ReferenceScopeFilter;
   groupingMode: ReferenceGroupingMode;
   pinnedAt: number;
+  anchorUri?: vscode.Uri;
 }
 
 export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>, vscode.Disposable {
@@ -193,7 +195,7 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
   private refs: ClassifiedReference[] = [];
   private expandSubLevels = true;
   private workspaceRoot?: string;
-  private activeDocumentUri?: vscode.Uri;
+  private scopeAnchorUri?: vscode.Uri;
   private scopeFilter: ReferenceScopeFilter = 'all';
   private groupingMode: ReferenceGroupingMode = 'directory';
 
@@ -205,13 +207,14 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
     this.workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   }
 
-  setResults(symbolName: string, refs: ClassifiedReference[]): void {
+  setResults(symbolName: string, refs: ClassifiedReference[], anchorUri?: vscode.Uri): void {
     this.symbolName = symbolName;
     this.allRefs = refs;
+    this.scopeAnchorUri = anchorUri?.scheme === 'file' ? anchorUri : this.scopeAnchorUri;
     this.applyFilter();
     // Truncate forward history, push new entry
     this.history.splice(this.historyIndex + 1);
-    this.history.push({ symbolName, refs });
+    this.history.push({ symbolName, refs, anchorUri: this.scopeAnchorUri });
     if (this.history.length > MAX_HISTORY) this.history.shift();
     this.historyIndex = this.history.length - 1;
     this._onDidChangeTreeData.fire();
@@ -236,6 +239,7 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
     const entry = this.history[this.historyIndex];
     this.symbolName = entry.symbolName;
     this.allRefs = entry.refs;
+    this.scopeAnchorUri = entry.anchorUri;
     this.applyFilter();
     this._onDidChangeTreeData.fire();
   }
@@ -251,16 +255,8 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
     return this.allRefs.length > 0;
   }
 
-  setActiveDocument(uri: vscode.Uri | undefined): void {
-    const next = uri?.scheme === 'file' ? uri : undefined;
-    const prevKey = this.activeDocumentUri?.toString() ?? '';
-    const nextKey = next?.toString() ?? '';
-    if (prevKey === nextKey) return;
-    this.activeDocumentUri = next;
-    if (this.dependsOnActiveDocument()) {
-      this.applyFilter();
-      this._onDidChangeTreeData.fire();
-    }
+  setScopeAnchor(uri: vscode.Uri | undefined): void {
+    this.scopeAnchorUri = uri?.scheme === 'file' ? uri : undefined;
   }
 
   setScopeFilter(filter: ReferenceScopeFilter): void {
@@ -292,6 +288,7 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
       existing.scopeFilter = this.scopeFilter;
       existing.groupingMode = this.groupingMode;
       existing.pinnedAt = Date.now();
+      existing.anchorUri = this.scopeAnchorUri;
       this.sortPinnedResults();
       return { entry: existing, isNew: false };
     }
@@ -303,6 +300,7 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
       scopeFilter: this.scopeFilter,
       groupingMode: this.groupingMode,
       pinnedAt: Date.now(),
+      anchorUri: this.scopeAnchorUri,
     };
     this.pinnedResults.unshift(entry);
     if (this.pinnedResults.length > MAX_PINNED) {
@@ -321,7 +319,7 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
 
     this.scopeFilter = entry.scopeFilter;
     this.groupingMode = entry.groupingMode;
-    this.setResults(entry.symbolName, entry.refs);
+    this.setResults(entry.symbolName, entry.refs, entry.anchorUri);
     return true;
   }
 
@@ -542,22 +540,17 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
       if (this.scopeFilter === 'test') return ref.context === CodeContext.Test;
 
       if (this.scopeFilter === 'currentFile') {
-        return !!this.activeDocumentUri && ref.location.uri.toString() === this.activeDocumentUri.toString();
+        return !!this.scopeAnchorUri && ref.location.uri.toString() === this.scopeAnchorUri.toString();
       }
 
       if (this.scopeFilter === 'currentDirectory') {
-        if (!this.activeDocumentUri) return false;
-        return path.dirname(ref.location.uri.fsPath) === path.dirname(this.activeDocumentUri.fsPath);
+        if (!this.scopeAnchorUri) return false;
+        return path.dirname(ref.location.uri.fsPath) === path.dirname(this.scopeAnchorUri.fsPath);
       }
 
       return this.isWorkspaceSourceUri(ref.location.uri);
     });
     this.expandSubLevels = this.refs.length <= AUTO_EXPAND_THRESHOLD;
-  }
-
-  private dependsOnActiveDocument(): boolean {
-    return this.scopeFilter === 'currentFile'
-      || this.scopeFilter === 'currentDirectory';
   }
 
   private scopeFilterLabel(): string {
