@@ -569,37 +569,11 @@ group('Reference scope anchor — current directory stays anchored to query dire
   assert(filtered.every(ref => ref.path.startsWith('src/')), 'all results stay in src directory');
 });
 
-// ── Text search tree layering tests ─────────────────────────────────────────
+// ── Text search flat search tests ───────────────────────────────────────────
 
-function listChildDirectories(matches, parentDirPath) {
+function groupMatchesByFile(matches) {
   const buckets = new Map();
   for (const match of matches) {
-    if (!match.directoryPath) continue;
-    if (parentDirPath) {
-      if (match.directoryPath === parentDirPath || !match.directoryPath.startsWith(parentDirPath + '/')) continue;
-      const remainder = match.directoryPath.slice(parentDirPath.length + 1);
-      const childName = remainder.split('/')[0];
-      const childPath = `${parentDirPath}/${childName}`;
-      const bucket = buckets.get(childPath) || [];
-      bucket.push(match);
-      buckets.set(childPath, bucket);
-      continue;
-    }
-    const childName = match.directoryPath.split('/')[0];
-    const childPath = childName;
-    const bucket = buckets.get(childPath) || [];
-    bucket.push(match);
-    buckets.set(childPath, bucket);
-  }
-  return [...buckets.entries()]
-    .map(([fullPath, bucketMatches]) => ({ fullPath, matches: bucketMatches }))
-    .sort((a, b) => a.fullPath.localeCompare(b.fullPath));
-}
-
-function listFilesAtDirectory(matches, directoryPath) {
-  const buckets = new Map();
-  for (const match of matches) {
-    if (match.directoryPath !== directoryPath) continue;
     const bucket = buckets.get(match.relativePath) || [];
     bucket.push(match);
     buckets.set(match.relativePath, bucket);
@@ -607,38 +581,495 @@ function listFilesAtDirectory(matches, directoryPath) {
   return [...buckets.keys()].sort();
 }
 
-group('Text search tree layering — root only shows first-level directories', () => {
-  const matches = [
-    { relativePath: 'assets/lobby/main/PhoneLogin.ts', directoryPath: 'assets/lobby/main' },
-    { relativePath: 'assets/lobby/main/SessionPop.ts', directoryPath: 'assets/lobby/main' },
-    { relativePath: 'assets/core/App.ts', directoryPath: 'assets/core' },
+function findSubsequenceRange(lineText, query) {
+  const caseSensitive = /[A-Z]/.test(query);
+  const source = caseSensitive ? lineText : lineText.toLowerCase();
+  const target = caseSensitive ? query : query.toLowerCase();
+  let first = -1;
+  let last = -1;
+  let cursor = 0;
+  for (const ch of target) {
+    const index = source.indexOf(ch, cursor);
+    if (index === -1) return undefined;
+    if (first === -1) first = index;
+    last = index;
+    cursor = index + 1;
+  }
+  return { start: first, end: last + 1 };
+}
+
+function mergeExcludeGlobs(searchExclude, filesExclude, customExclude) {
+  const values = [
+    ...Object.entries(searchExclude).filter(([, enabled]) => enabled === true).map(([glob]) => glob),
+    ...Object.entries(filesExclude).filter(([, enabled]) => enabled === true).map(([glob]) => glob),
+    ...customExclude,
   ];
-  const rootDirs = listChildDirectories(matches, '');
-  assert(rootDirs.length === 1 && rootDirs[0].fullPath === 'assets', 'root collapses nested matches into first-level assets directory');
+  return [...new Set(values)].sort();
+}
+
+function splitGlobList(value) {
+  const parts = [];
+  let current = '';
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  let parenDepth = 0;
+  let escaped = false;
+
+  for (const ch of value) {
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      current += ch;
+      escaped = true;
+      continue;
+    }
+    if (ch === '{') braceDepth += 1;
+    else if (ch === '}' && braceDepth > 0) braceDepth -= 1;
+    else if (ch === '[') bracketDepth += 1;
+    else if (ch === ']' && bracketDepth > 0) bracketDepth -= 1;
+    else if (ch === '(') parenDepth += 1;
+    else if (ch === ')' && parenDepth > 0) parenDepth -= 1;
+
+    if (ch === ',' && braceDepth === 0 && bracketDepth === 0 && parenDepth === 0) {
+      const normalized = current.trim();
+      if (normalized) parts.push(normalized);
+      current = '';
+      continue;
+    }
+
+    current += ch;
+  }
+
+  const tail = current.trim();
+  if (tail) parts.push(tail);
+  return parts;
+}
+
+function globToSearchRegex(pattern) {
+  const normalized = pattern.replace(/\\/g, '/');
+  let regStr = normalized
+    .replace(/\./g, '\\.')
+    .replace(/\*\*\//g, '\x00DSTAR_SLASH\x00')
+    .replace(/\*\*/g, '\x00DSTAR\x00')
+    .replace(/\*/g, '[^/]*')
+    .replace(/\?/g, '[^/]')
+    .replace(/\{([^}]+)\}/g, (_m, inner) => `(${inner.split(',').join('|')})`)
+    .replace(/\x00DSTAR_SLASH\x00/g, '(.+/)?')
+    .replace(/\x00DSTAR\x00/g, '.*');
+  return new RegExp(`(^|/)${regStr}($|/)`);
+}
+
+function resolveWhenTarget(relativePath, when) {
+  const normalized = relativePath.replace(/\\/g, '/');
+  const slashIndex = normalized.lastIndexOf('/');
+  const fileName = slashIndex >= 0 ? normalized.slice(slashIndex + 1) : normalized;
+  const dirName = slashIndex >= 0 ? normalized.slice(0, slashIndex) : '';
+  const dotIndex = fileName.lastIndexOf('.');
+  const basename = dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName;
+  const replaced = when.replace(/\$\(basename\)/g, basename);
+  return dirName ? `${dirName}/${replaced}` : replaced;
+}
+
+function shouldExcludeRelativePath(relativePath, folderPath, rules, existingFiles) {
+  for (const rule of rules) {
+    if (!rule.regex.test(relativePath)) continue;
+    if (!rule.when) return true;
+    const siblingRelativePath = resolveWhenTarget(relativePath, rule.when);
+    if (existingFiles.has(`${folderPath}/${siblingRelativePath}`)) return true;
+  }
+  return false;
+}
+
+function findCommentStart(languageId, lineText) {
+  const trimmed = lineText.trimStart();
+  const leadingOffset = lineText.length - trimmed.length;
+  if (trimmed.startsWith('*') || trimmed.startsWith('*/')) return leadingOffset;
+
+  let style = 'slash';
+  if (['python', 'shellscript', 'makefile', 'yaml', 'toml', 'dockercompose'].includes(languageId)) style = 'hash';
+  else if (['lua', 'sql'].includes(languageId)) style = 'dashdash';
+  else if (['html', 'xml', 'markdown'].includes(languageId)) style = 'xml';
+  else if (['ini', 'properties'].includes(languageId)) style = 'semicolon';
+
+  let inSingle = false;
+  let inDouble = false;
+  let inBacktick = false;
+  let escaped = false;
+
+  for (let index = 0; index < lineText.length; index++) {
+    const ch = lineText[index];
+    const next = lineText[index + 1] || '';
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (inSingle) {
+      if (ch === '\\') escaped = true;
+      else if (ch === "'") inSingle = false;
+      continue;
+    }
+    if (inDouble) {
+      if (ch === '\\') escaped = true;
+      else if (ch === '"') inDouble = false;
+      continue;
+    }
+    if (inBacktick) {
+      if (ch === '\\') escaped = true;
+      else if (ch === '`') inBacktick = false;
+      continue;
+    }
+    if (ch === "'") {
+      inSingle = true;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      continue;
+    }
+    if (ch === '`') {
+      inBacktick = true;
+      continue;
+    }
+    if (style === 'slash' && ch === '/' && next === '/') return index;
+    if (style === 'slash' && ch === '/' && next === '*') return index;
+    if (style === 'hash' && ch === '#') return index;
+    if (style === 'dashdash' && ch === '-' && next === '-') return index;
+    if (style === 'xml' && ch === '<' && lineText.slice(index, index + 4) === '<!--') return index;
+    if (style === 'semicolon' && ch === ';') return index;
+  }
+  return -1;
+}
+
+function buildSectionLabel(match, options) {
+  const parts = [];
+  if (options.groupCodeAndComments) parts.push(match.contentKind === 'comment' ? 'Comments' : 'Code');
+  if (options.groupConfigAndCodeFiles) parts.push(match.fileKind === 'config' ? 'Config Files' : 'Code Files');
+  return parts.join(' · ') || 'All';
+}
+
+function shortenTitlePart(value, maxLength) {
+  return value.length > maxLength ? `${value.slice(0, Math.max(0, maxLength - 1))}…` : value;
+}
+
+function buildTextSearchTitle(query, request, warning) {
+  if (!query) return 'Text Search';
+  const parts = [];
+  if (request?.fuzzySearch) parts.push('fuzzy');
+  else if (request?.useRegExp) parts.push('regex');
+  if (request?.matchCase) parts.push('case');
+  if (request?.matchWholeWord && !request?.fuzzySearch) parts.push('word');
+  const includeParts = request?.include ? splitGlobList(request.include) : [];
+  if (includeParts.length === 1) parts.push(`in:${shortenTitlePart(includeParts[0], 18)}`);
+  else if (includeParts.length > 1) parts.push(`in:${shortenTitlePart(includeParts[0], 14)} +${includeParts.length - 1}`);
+  const excludeParts = request?.exclude ? splitGlobList(request.exclude) : [];
+  if (excludeParts.length === 1) parts.push(`out:${shortenTitlePart(excludeParts[0], 18)}`);
+  else if (excludeParts.length > 1) parts.push(`out:${shortenTitlePart(excludeParts[0], 14)} +${excludeParts.length - 1}`);
+  if (warning) parts.push('limited');
+  const suffix = parts.length > 0 ? ` [${parts.join(', ')}]` : '';
+  return `Text Search: ${shortenTitlePart(query, 48)}${suffix}`;
+}
+
+function isInsideSlashBlockComment(lines, lineIndex) {
+  let inBlockComment = false;
+  for (let index = 0; index <= lineIndex; index++) {
+    const line = lines[index];
+    if (inBlockComment) {
+      if (index === lineIndex) return true;
+      const closeIndex = line.indexOf('*/');
+      if (closeIndex !== -1) inBlockComment = false;
+      continue;
+    }
+
+    const openIndex = line.indexOf('/*');
+    if (openIndex === -1) continue;
+    const closeIndex = line.indexOf('*/', openIndex + 2);
+    if (index === lineIndex) return true;
+    if (closeIndex === -1) inBlockComment = true;
+  }
+  return false;
+}
+
+group('Text search flat list — groups by relative file path', () => {
+  const matches = [
+    { relativePath: 'assets/lobby/main/PhoneBind/PhoneBind.ts' },
+    { relativePath: 'assets/lobby/main/PhoneBind/PhoneBind.ts' },
+    { relativePath: 'assets/lobby/main/component/Login.ts' },
+  ];
+  const files = groupMatchesByFile(matches);
+  assert(files.length === 2, 'deduplicates files into a flat list');
+  assert(files[0] === 'assets/lobby/main/PhoneBind/PhoneBind.ts', 'keeps relative path as file label');
+  assert(files[1] === 'assets/lobby/main/component/Login.ts', 'sorts by relative path');
 });
 
-group('Text search tree layering — child directory expands one level at a time', () => {
-  const matches = [
-    { relativePath: 'assets/lobby/main/PhoneLogin.ts', directoryPath: 'assets/lobby/main' },
-    { relativePath: 'assets/lobby/start/Login.ts', directoryPath: 'assets/lobby/start' },
-    { relativePath: 'assets/core/App.ts', directoryPath: 'assets/core' },
-  ];
-  const assetChildren = listChildDirectories(matches, 'assets');
-  assert(assetChildren.length === 2, 'assets has two direct child directories');
-  assert(assetChildren[0].fullPath === 'assets/core', 'first child is assets/core');
-  assert(assetChildren[1].fullPath === 'assets/lobby', 'second child is assets/lobby');
+group('Text search fuzzy matching — subsequence match works when enabled', () => {
+  const range = findSubsequenceRange('relogin: true', 'rlt');
+  assert(!!range, 'finds fuzzy subsequence match');
+  assert(range.start === 0, 'fuzzy range starts at first matched character');
+  assert(range.end === 10, 'fuzzy range ends at last matched character + 1');
+  assert(findSubsequenceRange('relogin: true', 'rzz') === undefined, 'returns undefined when subsequence does not exist');
 });
 
-group('Text search tree layering — files stay under their exact directory', () => {
-  const matches = [
-    { relativePath: 'assets/lobby/main/PhoneLogin.ts', directoryPath: 'assets/lobby/main' },
-    { relativePath: 'assets/lobby/main/PhoneLogin.ts', directoryPath: 'assets/lobby/main' },
-    { relativePath: 'assets/lobby/main/SessionPop.ts', directoryPath: 'assets/lobby/main' },
+group('Text search globs — merges VS Code excludes with custom excludes', () => {
+  const globs = mergeExcludeGlobs(
+    { '**/dist/**': true, '**/coverage/**': false },
+    { '**/node_modules/**': true },
+    ['**/*.snap'],
+  );
+  assert(globs.length === 3, 'collects enabled search/files excludes and custom excludes');
+  assert(globs.includes('**/dist/**'), 'includes search.exclude glob');
+  assert(globs.includes('**/node_modules/**'), 'includes files.exclude glob');
+  assert(globs.includes('**/*.snap'), 'includes custom exclude glob');
+});
+
+group('Text search globs — preserves brace patterns when splitting runtime input', () => {
+  const globs = splitGlobList('src/**/*.{ts,tsx},test/**/*.{ts,tsx},**/*.spec.ts');
+  assert(globs.length === 3, 'splits only at top-level commas');
+  assert(globs[0] === 'src/**/*.{ts,tsx}', 'keeps first brace glob intact');
+  assert(globs[1] === 'test/**/*.{ts,tsx}', 'keeps second brace glob intact');
+  assert(globs[2] === '**/*.spec.ts', 'keeps plain glob intact');
+});
+
+group('Text search globs — respects conditional exclude rules', () => {
+  const rules = [
+    { pattern: '**/*.js', regex: globToSearchRegex('**/*.js'), when: '$(basename).ts' },
   ];
-  const files = listFilesAtDirectory(matches, 'assets/lobby/main');
-  assert(files.length === 2, 'deduplicates files within one directory');
-  assert(files[0] === 'assets/lobby/main/PhoneLogin.ts', 'includes PhoneLogin.ts');
-  assert(files[1] === 'assets/lobby/main/SessionPop.ts', 'includes SessionPop.ts');
+  const existingFiles = new Set(['workspace/src/login.ts']);
+  assert(
+    shouldExcludeRelativePath('src/login.js', 'workspace', rules, existingFiles) === true,
+    'excludes generated file when the sibling source file exists',
+  );
+  assert(
+    shouldExcludeRelativePath('src/standalone.js', 'workspace', rules, existingFiles) === false,
+    'keeps file when the conditional sibling does not exist',
+  );
+});
+
+group('Text search comments — does not treat URL markers as comments', () => {
+  assert(
+    findCommentStart('typescript', 'const url = "http://service/login";') === -1,
+    'http:// inside a string should not be treated as a comment',
+  );
+  assert(
+    findCommentStart('typescript', 'const value = 1; // login') === 17,
+    'real inline comment stays detectable',
+  );
+});
+
+group('Text search comments — keeps block comment body in the comment bucket', () => {
+  const lines = [
+    '/*',
+    'login failed and needs retry',
+    '*/',
+  ];
+  assert(isInsideSlashBlockComment(lines, 1) === true, 'block comment body line stays classified as comment');
+});
+
+group('Text search sections — builds configurable section labels', () => {
+  const match = { contentKind: 'comment', fileKind: 'config' };
+  assert(
+    buildSectionLabel(match, { groupCodeAndComments: true, groupConfigAndCodeFiles: true }) === 'Comments · Config Files',
+    'supports combined comment/config grouping',
+  );
+  assert(
+    buildSectionLabel(match, { groupCodeAndComments: false, groupConfigAndCodeFiles: true }) === 'Config Files',
+    'supports config/code file grouping only',
+  );
+  assert(
+    buildSectionLabel(match, { groupCodeAndComments: true, groupConfigAndCodeFiles: false }) === 'Comments',
+    'supports code/comment grouping only',
+  );
+});
+
+group('Text search title — summarizes active search conditions', () => {
+  const title = buildTextSearchTitle('login', {
+    include: 'src/**/*.{ts,tsx},test/**/*.ts',
+    exclude: '**/*.spec.ts',
+    useRegExp: true,
+    matchCase: true,
+    matchWholeWord: true,
+    fuzzySearch: false,
+  }, 'limited');
+  assert(title.includes('regex'), 'includes regex mode');
+  assert(title.includes('case'), 'includes case-sensitive mode');
+  assert(title.includes('word'), 'includes whole-word mode');
+  assert(title.includes('in:src/**/*.{ts,'), 'includes summarized include glob');
+  assert(title.includes('out:**/*.spec.ts'), 'includes summarized exclude glob');
+  assert(title.includes('limited'), 'includes truncation warning marker');
+});
+
+function collectConfiguredExcludeGlobs(config) {
+  return Object.entries(config)
+    .filter(([, value]) => value === true || (value && typeof value === 'object'))
+    .map(([glob]) => glob)
+    .sort();
+}
+
+function getAdjustedOffsetForTests(originalOffset, applied) {
+  let delta = 0;
+  for (const change of applied) {
+    if (change.originalStart < originalOffset) delta += change.delta;
+  }
+  return originalOffset + delta;
+}
+
+function utf8ByteOffsetToUtf16ColumnForTests(lineText, byteOffset) {
+  const buffer = Buffer.from(lineText, 'utf8');
+  const clampedOffset = Math.max(0, Math.min(byteOffset, buffer.length));
+  return buffer.subarray(0, clampedOffset).toString('utf8').length;
+}
+
+function buildLineOffsetsForTests(value) {
+  const offsets = [0];
+  for (let index = 0; index < value.length; index++) {
+    if (value[index] === '\n') offsets.push(index + 1);
+  }
+  return offsets;
+}
+
+function offsetAtForTests(lineOffsets, line, character) {
+  return (lineOffsets[line] ?? lineOffsets[lineOffsets.length - 1] ?? 0) + character;
+}
+
+function positionAtOffsetForTests(lineOffsets, content, offset) {
+  const clampedOffset = Math.max(0, Math.min(offset, content.length));
+  let low = 0;
+  let high = lineOffsets.length - 1;
+  while (low < high) {
+    const mid = Math.floor((low + high + 1) / 2);
+    if (lineOffsets[mid] <= clampedOffset) low = mid;
+    else high = mid - 1;
+  }
+  return { line: low, character: clampedOffset - (lineOffsets[low] ?? 0) };
+}
+
+function applyReplacementTextForTests(matchedText, request) {
+  if (!request.useRegExp) return request.replaceText;
+  const flags = request.matchCase ? 'u' : 'iu';
+  return matchedText.replace(new RegExp(request.query, flags), request.replaceText);
+}
+
+function renderHighlightedTextForTests(lineText, startCharacter, endCharacter) {
+  const before = lineText.slice(0, startCharacter);
+  const hit = lineText.slice(startCharacter, endCharacter);
+  const after = lineText.slice(endCharacter);
+  return [before, hit, after];
+}
+
+function buildCriteriaSignatureForTests(request, groupingMode) {
+  return JSON.stringify({
+    query: request.query,
+    include: request.include,
+    exclude: request.exclude,
+    useRegExp: request.useRegExp,
+    matchCase: request.matchCase,
+    matchWholeWord: request.matchWholeWord,
+    fuzzySearch: request.fuzzySearch,
+    beforeContextLines: request.beforeContextLines,
+    afterContextLines: request.afterContextLines,
+    groupingMode,
+  });
+}
+
+group('Text search draft state — replace text alone does not stale the result set', () => {
+  const rendered = {
+    query: 'login',
+    replaceText: '',
+    include: '',
+    exclude: '',
+    useRegExp: false,
+    matchCase: false,
+    matchWholeWord: false,
+    fuzzySearch: false,
+    beforeContextLines: 2,
+    afterContextLines: 3,
+  };
+  const draft = { ...rendered, replaceText: 'signin' };
+  assert(
+    buildCriteriaSignatureForTests(rendered, 'none') === buildCriteriaSignatureForTests(draft, 'none'),
+    'ignores replaceText when checking whether displayed results are stale',
+  );
+});
+
+group('Text search draft state — changing include marks displayed results as stale', () => {
+  const rendered = {
+    query: 'login',
+    replaceText: '',
+    include: '',
+    exclude: '',
+    useRegExp: false,
+    matchCase: false,
+    matchWholeWord: false,
+    fuzzySearch: false,
+    beforeContextLines: 2,
+    afterContextLines: 3,
+  };
+  const draft = { ...rendered, include: 'src/**/*.ts' };
+  assert(
+    buildCriteriaSignatureForTests(rendered, 'none') !== buildCriteriaSignatureForTests(draft, 'none'),
+    'treats search-affecting edits as stale and forces a new search before replace',
+  );
+});
+
+group('Text search excludes — keeps object-form VS Code rules', () => {
+  const globs = collectConfiguredExcludeGlobs({
+    '**/*.js': { when: '$(basename).ts' },
+    '**/dist/**': true,
+    '**/coverage/**': false,
+  });
+  assert(globs.length === 2, 'collects boolean and object-form exclude rules');
+  assert(globs.includes('**/*.js'), 'keeps conditional exclude rule');
+  assert(globs.includes('**/dist/**'), 'keeps boolean exclude rule');
+});
+
+group('Text search replace — adjusts offsets after earlier replacements', () => {
+  const adjusted = getAdjustedOffsetForTests(10, [
+    { originalStart: 2, delta: 3 },
+    { originalStart: 8, delta: -1 },
+    { originalStart: 12, delta: 5 },
+  ]);
+  assert(adjusted === 12, 'applies only deltas before the current original offset');
+});
+
+group('Text search replace — supports regex capture replacement', () => {
+  const replaced = applyReplacementTextForTests('login failed', {
+    query: '(login) (failed)',
+    replaceText: '$2: $1',
+    useRegExp: true,
+    matchCase: true,
+  });
+  assert(replaced === 'failed: login', 'reuses capture groups in replacement text');
+});
+
+group('Text search rg offsets — converts UTF-8 byte offsets to VS Code columns', () => {
+  const lineText = '前缀😀login';
+  const start = utf8ByteOffsetToUtf16ColumnForTests(lineText, Buffer.byteLength('前缀😀', 'utf8'));
+  const end = utf8ByteOffsetToUtf16ColumnForTests(lineText, Buffer.byteLength('前缀😀login', 'utf8'));
+  assert(start === 4, 'maps UTF-8 byte start to UTF-16 column');
+  assert(end === 9, 'maps UTF-8 byte end to UTF-16 column');
+});
+
+group('Text search replace — recalculates positions against the current file text', () => {
+  const originalText = 'foo\nbar baz\nqux';
+  const originalLineOffsets = buildLineOffsetsForTests(originalText);
+  const firstOriginalStart = offsetAtForTests(originalLineOffsets, 0, 0);
+  const firstOriginalEnd = offsetAtForTests(originalLineOffsets, 0, 3);
+  const replacementText = 'foo\nextra';
+  const afterFirst = `${originalText.slice(0, firstOriginalStart)}${replacementText}${originalText.slice(firstOriginalEnd)}`;
+  const secondOriginalStart = offsetAtForTests(originalLineOffsets, 1, 0);
+  const secondAdjustedStart = getAdjustedOffsetForTests(secondOriginalStart, [{ originalStart: firstOriginalStart, delta: replacementText.length - 3 }]);
+  const pos = positionAtOffsetForTests(buildLineOffsetsForTests(afterFirst), afterFirst, secondAdjustedStart);
+  assert(pos.line === 2, 'moves the next replacement to the shifted line after newline insertion');
+  assert(pos.character === 0, 'keeps the shifted replacement at the start of the line');
+});
+
+group('Text search highlight — isolates the matched substring range', () => {
+  const parts = renderHighlightedTextForTests('relogin: true', 2, 7);
+  assert(parts[0] === 're', 'keeps leading text before the match');
+  assert(parts[1] === 'login', 'extracts the matched substring');
+  assert(parts[2] === ': true', 'keeps trailing text after the match');
 });
 
 // ── Summary ───────────────────────────────────────────────────────────────────

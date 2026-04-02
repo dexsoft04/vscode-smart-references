@@ -170,13 +170,83 @@
       },
       {
         "command": "smartReferences.searchText",
-        "title": "Layered Text Search",
+        "title": "搜索增强",
         "icon": "$(search)"
       },
       {
         "command": "smartReferences.refreshTextSearch",
-        "title": "Refresh Text Search",
+        "title": "刷新搜索增强",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "smartReferences.setTextSearchGrouping",
+        "title": "切换搜索增强分组",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "smartReferences.configureTextSearch",
+        "title": "配置搜索增强",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "smartReferences.replaceAllTextSearchResults",
+        "title": "顺序替换当前结果",
+        "icon": "$(replace-all)"
+      },
+      {
+        "command": "smartReferences.replaceTextSearchMatch",
+        "title": "替换当前命中",
+        "icon": "$(replace)"
+      },
+      {
+        "command": "smartReferences.toggleTextSearchMatchCase",
+        "title": "切换搜索增强大小写",
+        "icon": "$(case-sensitive)"
+      },
+      {
+        "command": "smartReferences.toggleTextSearchWholeWord",
+        "title": "切换搜索增强整词",
+        "icon": "$(whole-word)"
+      },
+      {
+        "command": "smartReferences.toggleTextSearchRegex",
+        "title": "切换搜索增强正则",
+        "icon": "$(regex)"
+      },
+      {
+        "command": "smartReferences.replaceTextSearchSection",
+        "title": "替换当前分组",
+        "icon": "$(replace-all)"
+      },
+      {
+        "command": "smartReferences.replaceTextSearchFile",
+        "title": "替换当前文件",
+        "icon": "$(replace-all)"
+      },
+      {
+        "command": "smartReferences.setTextSearchInclude",
+        "title": "设置搜索增强包含文件",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "smartReferences.setTextSearchExclude",
+        "title": "设置搜索增强排除文件",
+        "icon": "$(close)"
+      },
+      {
+        "command": "smartReferences.toggleTextSearchFuzzy",
+        "title": "切换搜索增强模糊搜索",
+        "icon": "$(symbol-string)"
+      },
+      {
+        "command": "smartReferences.setTextSearchBeforeContext",
+        "title": "设置搜索增强上文行数",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "smartReferences.setTextSearchAfterContext",
+        "title": "设置搜索增强下文行数",
+        "icon": "$(arrow-down)"
       }
     ],
     "keybindings": [
@@ -214,6 +284,11 @@
         "command": "smartReferences.translate",
         "key": "alt+a",
         "when": "editorTextFocus"
+      },
+      {
+        "command": "smartReferences.searchText",
+        "key": "ctrl+alt+u",
+        "when": "editorTextFocus || !inputFocus"
       }
     ],
     "menus": {
@@ -338,22 +413,37 @@
           "command": "smartReferences.deleteFile",
           "when": "view == projectExplorer && viewItem == projectDir",
           "group": "7_modification@2"
+        },
+        {
+          "command": "smartReferences.replaceTextSearchMatch",
+          "when": "view == textSearchTree && viewItem == textSearchMatch",
+          "group": "inline@1"
+        },
+        {
+          "command": "smartReferences.replaceTextSearchSection",
+          "when": "view == textSearchTree && viewItem == textSearchSection",
+          "group": "inline@1"
+        },
+        {
+          "command": "smartReferences.replaceTextSearchFile",
+          "when": "view == textSearchTree && viewItem == textSearchFile",
+          "group": "inline@1"
         }
       ],
       "editor/context": [
         {
           "command": "smartReferences.findReferences",
-          "group": "navigation@9",
+          "group": "navigation@8",
           "when": "editorTextFocus"
         },
         {
           "command": "smartReferences.showTypeHierarchy",
-          "group": "navigation@10",
+          "group": "navigation@9",
           "when": "editorTextFocus"
         },
         {
           "command": "smartReferences.showStructure",
-          "group": "navigation@11",
+          "group": "navigation@10",
           "when": "editorTextFocus"
         }
       ],
@@ -426,12 +516,62 @@
         {
           "command": "smartReferences.searchText",
           "when": "view == textSearchTree",
-          "group": "navigation"
+          "group": "navigation@1"
+        },
+        {
+          "command": "smartReferences.setTextSearchInclude",
+          "when": "view == textSearchTree",
+          "group": "navigation@2"
+        },
+        {
+          "command": "smartReferences.setTextSearchExclude",
+          "when": "view == textSearchTree",
+          "group": "navigation@3"
+        },
+        {
+          "command": "smartReferences.toggleTextSearchMatchCase",
+          "when": "view == textSearchTree",
+          "group": "navigation@4"
+        },
+        {
+          "command": "smartReferences.toggleTextSearchWholeWord",
+          "when": "view == textSearchTree",
+          "group": "navigation@5"
+        },
+        {
+          "command": "smartReferences.toggleTextSearchRegex",
+          "when": "view == textSearchTree",
+          "group": "navigation@6"
+        },
+        {
+          "command": "smartReferences.toggleTextSearchFuzzy",
+          "when": "view == textSearchTree",
+          "group": "navigation@7"
+        },
+        {
+          "command": "smartReferences.setTextSearchBeforeContext",
+          "when": "view == textSearchTree",
+          "group": "navigation@8"
+        },
+        {
+          "command": "smartReferences.setTextSearchAfterContext",
+          "when": "view == textSearchTree",
+          "group": "navigation@9"
+        },
+        {
+          "command": "smartReferences.setTextSearchGrouping",
+          "when": "view == textSearchTree",
+          "group": "navigation@10"
         },
         {
           "command": "smartReferences.refreshTextSearch",
           "when": "view == textSearchTree",
-          "group": "navigation"
+          "group": "navigation@11"
+        },
+        {
+          "command": "smartReferences.replaceAllTextSearchResults",
+          "when": "view == textSearchTree",
+          "group": "navigation@12"
         }
       ]
     },
@@ -446,7 +586,7 @@
       "panel": [
         {
           "id": "smartReferencesSearchPanel",
-          "title": "Layered Search",
+          "title": "搜索增强",
           "icon": "images/icon.svg"
         }
       ]
@@ -479,7 +619,7 @@
       "smartReferencesSearchPanel": [
         {
           "id": "textSearchTree",
-          "name": "Text Search"
+          "name": "搜索增强"
         }
       ]
     },
@@ -506,7 +646,7 @@
       },
       {
         "view": "textSearchTree",
-        "contents": "No text search loaded yet.\n\nRun [Layered Text Search](command:smartReferences.searchText) to search with a directory tree."
+        "contents": "还没有搜索结果。\n\n运行 [搜索增强](command:smartReferences.searchText) 开始搜索。"
       }
     ],
     "colors": [
@@ -624,6 +764,65 @@
           "type": "string",
           "default": "",
           "description": "Google Cloud Translation API key"
+        },
+        "smartReferences.textSearch.beforeContextLines": {
+          "type": "number",
+          "default": 2,
+          "minimum": 0,
+          "maximum": 20,
+          "description": "Number of lines shown before each text-search match."
+        },
+        "smartReferences.textSearch.afterContextLines": {
+          "type": "number",
+          "default": 3,
+          "minimum": 0,
+          "maximum": 20,
+          "description": "Number of lines shown after each text-search match."
+        },
+        "smartReferences.textSearch.includeGlobs": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "搜索增强额外包含的 glob 规则；为空时不额外限制。"
+        },
+        "smartReferences.textSearch.excludeGlobs": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "搜索增强额外排除的 glob 规则，会叠加在 VS Code 的 search.exclude 和 files.exclude 之上。"
+        },
+        "smartReferences.textSearch.fuzzySearch": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否为搜索增强启用模糊子序列匹配；默认关闭。"
+        },
+        "smartReferences.textSearch.groupCodeAndComments": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否把搜索增强结果按代码命中和注释命中分组。"
+        },
+        "smartReferences.textSearch.groupConfigAndCodeFiles": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否把搜索增强结果按配置文件和代码文件分组。"
+        },
+        "smartReferences.textSearch.maxFuzzyFileScan": {
+          "type": "number",
+          "default": 2000,
+          "minimum": 100,
+          "maximum": 20000,
+          "description": "搜索增强在模糊搜索模式下最多扫描多少个文件。"
+        },
+        "smartReferences.textSearch.maxFuzzyMatches": {
+          "type": "number",
+          "default": 1000,
+          "minimum": 50,
+          "maximum": 20000,
+          "description": "搜索增强在模糊搜索模式下最多收集多少条命中。"
         }
       }
     }
