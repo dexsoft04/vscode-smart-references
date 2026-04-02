@@ -221,6 +221,7 @@ export class SymbolSearchProvider implements vscode.Disposable {
       if (token.isCancellationRequested || !this.quickPick) return;
 
       const all = symbols ?? [];
+      const filteredSymbols = all.filter(s => matchesActiveCategories(s.kind, this.activeCategories));
       this.log.appendLine(`[search] query="${query}" aliases=[${queryAliases.join(',')}] categories=[${this.activeCategories.join(',')}] raw=${all.length} symbols`);
       const kindCounts: Record<number, number> = {};
       const extCounts: Record<string, number> = {};
@@ -239,7 +240,7 @@ export class SymbolSearchProvider implements vscode.Disposable {
 
       const ranked = this.ranker.rank(
         query,
-        all,
+        filteredSymbols,
         this.contextUri,
         this.config.maxTotal,
         this.activeCategories,
@@ -355,9 +356,7 @@ export class SymbolSearchProvider implements vscode.Disposable {
         );
         if (docSymbols && docSymbols.length > 0) {
           const flat = flattenDocumentSymbols(docSymbols, this.contextUri);
-          const filtered = cats.length > 0
-            ? flat.filter(s => cats.includes(symbolKindToCategory(s.kind)))
-            : flat;
+          const filtered = flat.filter(s => matchesActiveCategories(s.kind, cats));
           if (filtered.length > 0) {
             items.push({ label: 'Current File', kind: vscode.QuickPickItemKind.Separator });
             for (const sym of filtered) {
@@ -378,9 +377,7 @@ export class SymbolSearchProvider implements vscode.Disposable {
 
     // Recent symbols
     const recent = this.ranker.getRecentSymbols();
-    const filteredRecent = cats.length > 0
-      ? recent.filter(s => cats.includes(symbolKindToCategory(s.kind)))
-      : recent;
+    const filteredRecent = recent.filter(s => matchesActiveCategories(s.kind, cats));
     if (filteredRecent.length > 0) {
       items.push({ label: 'Recent', kind: vscode.QuickPickItemKind.Separator });
       for (const sym of filteredRecent) {
@@ -457,6 +454,40 @@ function buildPlaceholder(categories: SymbolCategory[]): string {
     return 'Type to search classes, interfaces, and enums';
   }
   return 'Type to search symbols';
+}
+
+function matchesActiveCategories(kind: vscode.SymbolKind, categories: SymbolCategory[]): boolean {
+  if (categories.length === 0) return true;
+
+  if (isStrictTypeSearch(categories)) {
+    return matchesTypeSearchKind(kind, categories);
+  }
+
+  return categories.includes(symbolKindToCategory(kind));
+}
+
+function isStrictTypeSearch(categories: SymbolCategory[]): boolean {
+  return categories.length > 0
+    && categories.every(category =>
+      category === SymbolCategory.Class
+      || category === SymbolCategory.Interface
+      || category === SymbolCategory.Enum,
+    );
+}
+
+function matchesTypeSearchKind(kind: vscode.SymbolKind, categories: SymbolCategory[]): boolean {
+  if (categories.includes(SymbolCategory.Class)) {
+    if (kind === vscode.SymbolKind.Class || kind === vscode.SymbolKind.Struct || kind === vscode.SymbolKind.TypeParameter) {
+      return true;
+    }
+  }
+  if (categories.includes(SymbolCategory.Interface) && kind === vscode.SymbolKind.Interface) {
+    return true;
+  }
+  if (categories.includes(SymbolCategory.Enum) && kind === vscode.SymbolKind.Enum) {
+    return true;
+  }
+  return false;
 }
 
 function flattenDocumentSymbols(

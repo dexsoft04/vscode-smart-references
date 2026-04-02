@@ -333,6 +333,101 @@ group('buildDirIndex — empty input', () => {
   assert(index.size === 0, 'empty files produces empty index');
 });
 
+// ── Search Type filtering tests ─────────────────────────────────────────────
+
+const SymbolCategory = {
+  Class: 'Classes',
+  Interface: 'Interfaces',
+  Enum: 'Enums',
+  Function: 'Functions & Methods',
+  Variable: 'Variables & Constants',
+  Other: 'Other',
+};
+
+const SymbolKind = {
+  Class: 'Class',
+  Constructor: 'Constructor',
+  Struct: 'Struct',
+  TypeParameter: 'TypeParameter',
+  Interface: 'Interface',
+  Function: 'Function',
+  Method: 'Method',
+  Operator: 'Operator',
+  Variable: 'Variable',
+  Constant: 'Constant',
+  Field: 'Field',
+  Property: 'Property',
+  Enum: 'Enum',
+  EnumMember: 'EnumMember',
+};
+
+function symbolKindToCategory(kind) {
+  switch (kind) {
+    case SymbolKind.Class:
+    case SymbolKind.Constructor:
+    case SymbolKind.Struct:
+    case SymbolKind.TypeParameter:
+      return SymbolCategory.Class;
+    case SymbolKind.Interface:
+      return SymbolCategory.Interface;
+    case SymbolKind.Function:
+    case SymbolKind.Method:
+    case SymbolKind.Operator:
+      return SymbolCategory.Function;
+    case SymbolKind.Variable:
+    case SymbolKind.Constant:
+    case SymbolKind.Field:
+    case SymbolKind.Property:
+      return SymbolCategory.Variable;
+    case SymbolKind.Enum:
+    case SymbolKind.EnumMember:
+      return SymbolCategory.Enum;
+    default:
+      return SymbolCategory.Other;
+  }
+}
+
+function isStrictTypeSearch(categories) {
+  return categories.length > 0 && categories.every(category =>
+    category === SymbolCategory.Class
+    || category === SymbolCategory.Interface
+    || category === SymbolCategory.Enum
+  );
+}
+
+function matchesTypeSearchKind(kind, categories) {
+  if (categories.includes(SymbolCategory.Class)) {
+    if (kind === SymbolKind.Class || kind === SymbolKind.Struct || kind === SymbolKind.TypeParameter) {
+      return true;
+    }
+  }
+  if (categories.includes(SymbolCategory.Interface) && kind === SymbolKind.Interface) {
+    return true;
+  }
+  if (categories.includes(SymbolCategory.Enum) && kind === SymbolKind.Enum) {
+    return true;
+  }
+  return false;
+}
+
+function matchesActiveCategories(kind, categories) {
+  if (categories.length === 0) return true;
+  if (isStrictTypeSearch(categories)) return matchesTypeSearchKind(kind, categories);
+  return categories.includes(symbolKindToCategory(kind));
+}
+
+group('Search Type filtering — strict type definitions only', () => {
+  const cats = [SymbolCategory.Class, SymbolCategory.Interface, SymbolCategory.Enum];
+  assert(matchesActiveCategories(SymbolKind.Class, cats), 'includes class');
+  assert(matchesActiveCategories(SymbolKind.Struct, cats), 'includes struct');
+  assert(matchesActiveCategories(SymbolKind.Interface, cats), 'includes interface');
+  assert(matchesActiveCategories(SymbolKind.Enum, cats), 'includes enum');
+  assert(!matchesActiveCategories(SymbolKind.Constructor, cats), 'excludes constructor');
+  assert(!matchesActiveCategories(SymbolKind.EnumMember, cats), 'excludes enum member');
+  assert(!matchesActiveCategories(SymbolKind.Method, cats), 'excludes method');
+  assert(!matchesActiveCategories(SymbolKind.Constant, cats), 'excludes constant');
+});
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 
 console.log(`\n${'─'.repeat(40)}`);
