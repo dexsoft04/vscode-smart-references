@@ -480,6 +480,61 @@ group('Field declaration classification — keep real class field type annotatio
   assert(isInFieldTypeAnnotation(ref, [classField]), 'class field type annotation remains declaration');
 });
 
+// ── Reference scope filtering tests ─────────────────────────────────────────
+
+function isWorkspaceSourcePath(workspaceRoot, fsPath) {
+  if (!workspaceRoot) return false;
+  const normalizedRoot = workspaceRoot.replace(/\\/g, '/').replace(/\/+$/, '');
+  const normalizedPath = fsPath.replace(/\\/g, '/');
+  if (!normalizedPath.startsWith(normalizedRoot + '/')) return false;
+  const relative = normalizedPath.slice(normalizedRoot.length + 1);
+  if (!relative || relative.endsWith('.d.ts')) return false;
+  if (/(^|\/)(node_modules|vendor|dist|out|build|coverage|target|\.git)(\/|$)/.test(relative)) return false;
+  return true;
+}
+
+group('Workspace source filtering — keeps workspace source files', () => {
+  assert(
+    isWorkspaceSourcePath('/repo', '/repo/src/app.ts'),
+    'includes source file under workspace root',
+  );
+  assert(
+    isWorkspaceSourcePath('/repo', '/repo/packages/web/components/Button.vue'),
+    'includes nested workspace source file',
+  );
+});
+
+group('Workspace source filtering — excludes declarations and generated dirs', () => {
+  assert(
+    !isWorkspaceSourcePath('/repo', '/repo/src/types/api.d.ts'),
+    'excludes .d.ts files',
+  );
+  assert(
+    !isWorkspaceSourcePath('/repo', '/repo/dist/app.js'),
+    'excludes dist output',
+  );
+  assert(
+    !isWorkspaceSourcePath('/repo', '/repo/out/generated.js'),
+    'excludes out output',
+  );
+  assert(
+    !isWorkspaceSourcePath('/repo', '/repo/build/index.js'),
+    'excludes build output',
+  );
+  assert(
+    !isWorkspaceSourcePath('/repo', '/repo/node_modules/pkg/index.js'),
+    'excludes node_modules',
+  );
+  assert(
+    !isWorkspaceSourcePath('/repo', '/repo/vendor/pkg/file.go'),
+    'excludes vendor',
+  );
+  assert(
+    !isWorkspaceSourcePath('/repo', '/other/src/app.ts'),
+    'excludes files outside workspace root',
+  );
+});
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 
 console.log(`\n${'─'.repeat(40)}`);

@@ -5,7 +5,13 @@ import { makeCategoryUri } from './CategoryDecorationProvider';
 import { extractDocComment } from './StructureTreeProvider';
 
 type TreeNode = CategoryGroupNode | DirectoryNode | FileNode | CallerNode | ReferenceItem;
-export type ReferenceScopeFilter = 'all' | 'production' | 'test';
+export type ReferenceScopeFilter =
+  | 'all'
+  | 'production'
+  | 'test'
+  | 'currentFile'
+  | 'currentDirectory'
+  | 'workspaceSource';
 export type ReferenceGroupingMode = 'directory' | 'file';
 
 // ── Category group definition ─────────────────────────────────────────────────
@@ -187,6 +193,7 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
   private refs: ClassifiedReference[] = [];
   private expandSubLevels = true;
   private workspaceRoot?: string;
+  private activeDocumentUri?: vscode.Uri;
   private scopeFilter: ReferenceScopeFilter = 'all';
   private groupingMode: ReferenceGroupingMode = 'directory';
 
@@ -242,6 +249,18 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
 
   hasResults(): boolean {
     return this.allRefs.length > 0;
+  }
+
+  setActiveDocument(uri: vscode.Uri | undefined): void {
+    const next = uri?.scheme === 'file' ? uri : undefined;
+    const prevKey = this.activeDocumentUri?.toString() ?? '';
+    const nextKey = next?.toString() ?? '';
+    if (prevKey === nextKey) return;
+    this.activeDocumentUri = next;
+    if (this.dependsOnActiveDocument()) {
+      this.applyFilter();
+      this._onDidChangeTreeData.fire();
+    }
   }
 
   setScopeFilter(filter: ReferenceScopeFilter): void {
@@ -512,9 +531,7 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
 
   getSymbolLabel(): string {
     if (!this.symbolName) return '';
-    const suffix = this.scopeFilter === 'all'
-      ? 'All'
-      : this.scopeFilter === 'production' ? 'Production' : 'Tests';
+    const suffix = this.scopeFilterLabel();
     return `${this.symbolName} (${this.refs.length} usages · ${suffix})`;
   }
 
@@ -522,9 +539,46 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
     this.refs = this.allRefs.filter(ref => {
       if (this.scopeFilter === 'all') return true;
       if (this.scopeFilter === 'production') return ref.context === CodeContext.Production;
-      return ref.context === CodeContext.Test;
+      if (this.scopeFilter === 'test') return ref.context === CodeContext.Test;
+
+      if (this.scopeFilter === 'currentFile') {
+        return !!this.activeDocumentUri && ref.location.uri.toString() === this.activeDocumentUri.toString();
+      }
+
+      if (this.scopeFilter === 'currentDirectory') {
+        if (!this.activeDocumentUri) return false;
+        return path.dirname(ref.location.uri.fsPath) === path.dirname(this.activeDocumentUri.fsPath);
+      }
+
+      return this.isWorkspaceSourceUri(ref.location.uri);
     });
     this.expandSubLevels = this.refs.length <= AUTO_EXPAND_THRESHOLD;
+  }
+
+  private dependsOnActiveDocument(): boolean {
+    return this.scopeFilter === 'currentFile'
+      || this.scopeFilter === 'currentDirectory';
+  }
+
+  private scopeFilterLabel(): string {
+    switch (this.scopeFilter) {
+      case 'all': return 'All';
+      case 'production': return 'Production';
+      case 'test': return 'Tests';
+      case 'currentFile': return 'Current File';
+      case 'currentDirectory': return 'Current Directory';
+      case 'workspaceSource': return 'Workspace Source';
+    }
+  }
+
+  private isWorkspaceSourceUri(uri: vscode.Uri): boolean {
+    if (uri.scheme !== 'file' || !this.workspaceRoot) return false;
+    const relative = path.relative(this.workspaceRoot, uri.fsPath);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return false;
+    const normalized = relative.split(path.sep).join('/');
+    if (normalized.endsWith('.d.ts')) return false;
+    if (/(^|\/)(node_modules|vendor|dist|out|build|coverage|target|\.git)(\/|$)/.test(normalized)) return false;
+    return true;
   }
 
   private isSameSnapshot(symbolName: string, refsA: ClassifiedReference[], refsB: ClassifiedReference[]): boolean {
