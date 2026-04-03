@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { exec } from 'child_process';
 import { TestFileDetector } from '../analyzers/TestFileDetector';
+import { t } from '../i18n';
 
 // ── Directory index (pre-built for O(1) getChildren) ─────────────────────────
 
@@ -114,6 +115,12 @@ export function resolveRealUri(item: vscode.TreeItem): vscode.Uri | undefined {
 // ── Tree node types ───────────────────────────────────────────────────────────
 
 type ProjectNode = CategoryNode | ProjDirectoryNode | ProjFileNode;
+
+interface VisibleDirNodeInfo {
+  readonly dirPath: string;
+  readonly label: string;
+  readonly parentDirPath: string;
+}
 type ViewCategory = 'sources' | 'tests' | 'ignored' | 'all';
 
 class CategoryNode extends vscode.TreeItem {
@@ -133,8 +140,10 @@ class ProjDirectoryNode extends vscode.TreeItem {
     public readonly dirPath: string,
     public readonly category: ViewCategory,
     workspaceRoot: string,
+    label?: string,
+    public readonly parentDirPath = '',
   ) {
-    super(path.basename(dirPath), vscode.TreeItemCollapsibleState.Collapsed);
+    super(label ?? path.basename(dirPath), vscode.TreeItemCollapsibleState.Collapsed);
     this.resourceUri = vscode.Uri.file(path.join(workspaceRoot, dirPath));
     this.contextValue = 'projectDir';
     this.tooltip = dirPath;
@@ -157,7 +166,7 @@ class ProjFileNode extends vscode.TreeItem {
       this.resourceUri = fileUri;
     }
 
-    this.command = { command: 'vscode.open', title: 'Open File', arguments: [fileUri] };
+    this.command = { command: 'vscode.open', title: t('打开文件', 'Open File'), arguments: [fileUri] };
     this.contextValue = 'projectFile';
     this.tooltip = relativePath;
   }
@@ -283,7 +292,9 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
     if (element instanceof CategoryNode) return undefined;
 
     if (element instanceof ProjDirectoryNode) {
-      return this.getParentForPath(element.dirPath, element.category);
+      return element.parentDirPath
+        ? this.createVisibleDirectoryNode(element.parentDirPath, element.category)
+        : this.getParentForPath(element.dirPath, element.category);
     }
 
     return this.getParentForPath(element.relativePath, this.getCategoryForPath(element.relativePath));
@@ -303,14 +314,14 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
       if (this.viewMode === 'merged') {
         const nodes = this.getFromIndex(this.allIndex, '', 'all');
         if (this.ignoredEntries.length > 0) {
-          nodes.push(new CategoryNode('ignored', 'Ignored', 'circle-slash'));
+          nodes.push(new CategoryNode('ignored', t('已忽略', 'Ignored'), 'circle-slash'));
         }
         return nodes;
       }
       const nodes: ProjectNode[] = [];
-      if (this.hasSource) nodes.push(new CategoryNode('sources', 'Sources', 'file-code'));
-      if (this.hasTest) nodes.push(new CategoryNode('tests', 'Tests', 'beaker'));
-      if (this.ignoredEntries.length > 0) nodes.push(new CategoryNode('ignored', 'Ignored', 'circle-slash'));
+      if (this.hasSource) nodes.push(new CategoryNode('sources', t('源码', 'Sources'), 'file-code'));
+      if (this.hasTest) nodes.push(new CategoryNode('tests', t('测试', 'Tests'), 'beaker'));
+      if (this.ignoredEntries.length > 0) nodes.push(new CategoryNode('ignored', t('已忽略', 'Ignored'), 'circle-slash'));
       return nodes;
     }
 
@@ -345,7 +356,8 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
 
     const nodes: ProjectNode[] = [];
     for (const subdir of entry.subdirs) {
-      nodes.push(new ProjDirectoryNode(subdir, category, this.workspaceRoot));
+      const visibleDir = this.buildVisibleDirNode(index, subdir, dirPath);
+      nodes.push(new ProjDirectoryNode(visibleDir.dirPath, category, this.workspaceRoot, visibleDir.label, visibleDir.parentDirPath));
     }
     for (const fileName of entry.files) {
       const relativePath = dirPath ? `${dirPath}/${fileName}` : fileName;
@@ -373,7 +385,8 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
         if (e.name.startsWith('.')) continue;
         const relative = `${dirRelative}/${e.name}`;
         if (e.isDirectory()) {
-          dirs.push(new ProjDirectoryNode(relative, 'ignored', this.workspaceRoot));
+          const visibleDir = this.buildVisibleFsDirNode(relative, dirRelative);
+          dirs.push(new ProjDirectoryNode(visibleDir.dirPath, 'ignored', this.workspaceRoot, visibleDir.label, visibleDir.parentDirPath));
         } else {
           files.push(new ProjFileNode(relative, this.workspaceRoot, false));
         }
@@ -416,16 +429,78 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
     if (!category) return undefined;
     const parentDir = path.posix.dirname(relativePath);
     if (parentDir !== '.') {
-      return new ProjDirectoryNode(parentDir, category, this.workspaceRoot);
+      return this.createVisibleDirectoryNode(parentDir, category);
     }
     if (category === 'all') return undefined;
     return this.createCategoryNode(category);
   }
 
   private createCategoryNode(category: 'sources' | 'tests' | 'ignored'): CategoryNode {
-    if (category === 'sources') return new CategoryNode('sources', 'Sources', 'file-code');
-    if (category === 'tests') return new CategoryNode('tests', 'Tests', 'beaker');
-    return new CategoryNode('ignored', 'Ignored', 'circle-slash');
+    if (category === 'sources') return new CategoryNode('sources', t('源码', 'Sources'), 'file-code');
+    if (category === 'tests') return new CategoryNode('tests', t('测试', 'Tests'), 'beaker');
+    return new CategoryNode('ignored', t('已忽略', 'Ignored'), 'circle-slash');
+  }
+
+
+  private createVisibleDirectoryNode(dirPath: string, category: ViewCategory): ProjDirectoryNode {
+    const index = category === 'ignored' && !this.isInsideIgnoredDir(dirPath)
+      ? this.ignoredIndex
+      : category === 'all'
+        ? this.allIndex
+        : category === 'sources'
+          ? this.sourceIndex
+          : this.testIndex;
+    const info = category === 'ignored' && this.isInsideIgnoredDir(dirPath)
+      ? this.buildVisibleFsDirNode(dirPath, path.posix.dirname(dirPath) === '.' ? '' : path.posix.dirname(dirPath))
+      : this.findVisibleDirNode(index, dirPath);
+    if (info) return new ProjDirectoryNode(info.dirPath, category, this.workspaceRoot, info.label, info.parentDirPath);
+    return new ProjDirectoryNode(dirPath, category, this.workspaceRoot, undefined, path.posix.dirname(dirPath) === '.' ? '' : path.posix.dirname(dirPath));
+  }
+
+  private buildVisibleDirNode(index: Map<string, DirEntry>, dirPath: string, parentDirPath: string): VisibleDirNodeInfo {
+    let current = dirPath;
+    const labels = [path.posix.basename(dirPath)];
+    while (true) {
+      const entry = index.get(current);
+      if (!entry || entry.files.length > 0 || entry.subdirs.length !== 1) break;
+      current = entry.subdirs[0];
+      labels.push(path.posix.basename(current));
+    }
+    return { dirPath: current, label: labels.join('/'), parentDirPath };
+  }
+
+  private findVisibleDirNode(index: Map<string, DirEntry>, targetDirPath: string): VisibleDirNodeInfo | undefined {
+    let parentDirPath = '';
+    while (true) {
+      const entry = index.get(parentDirPath);
+      if (!entry) return undefined;
+      const child = entry.subdirs.find(subdir => targetDirPath === subdir || targetDirPath.startsWith(`${subdir}/`));
+      if (!child) return undefined;
+      const visible = this.buildVisibleDirNode(index, child, parentDirPath);
+      if (visible.dirPath === targetDirPath) return visible;
+      if (!targetDirPath.startsWith(`${visible.dirPath}/`)) return visible;
+      parentDirPath = visible.dirPath;
+    }
+  }
+
+  private buildVisibleFsDirNode(dirPath: string, parentDirPath: string): VisibleDirNodeInfo {
+    let current = dirPath;
+    const labels = [path.posix.basename(dirPath)];
+    while (true) {
+      const fullPath = path.join(this.workspaceRoot, current);
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(fullPath, { withFileTypes: true }).filter(entry => !entry.name.startsWith('.'));
+      } catch {
+        break;
+      }
+      const dirs = entries.filter(entry => entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name));
+      const files = entries.filter(entry => !entry.isDirectory());
+      if (files.length > 0 || dirs.length !== 1) break;
+      current = `${current}/${dirs[0].name}`;
+      labels.push(dirs[0].name);
+    }
+    return { dirPath: current, label: labels.join('/'), parentDirPath };
   }
 
   private hasFile(index: Map<string, DirEntry>, relativePath: string): boolean {

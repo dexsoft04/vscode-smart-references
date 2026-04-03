@@ -170,83 +170,129 @@
       },
       {
         "command": "smartReferences.searchText",
-        "title": "搜索增强",
+        "title": "%viewContainer.searchPanel.title%",
         "icon": "$(search)"
       },
       {
         "command": "smartReferences.refreshTextSearch",
-        "title": "刷新搜索增强",
+        "title": "%command.refreshTextSearch.title%",
         "icon": "$(refresh)"
       },
       {
         "command": "smartReferences.setTextSearchGrouping",
-        "title": "切换搜索增强分组",
+        "title": "%command.setTextSearchGrouping.title%",
         "icon": "$(list-tree)"
       },
       {
         "command": "smartReferences.configureTextSearch",
-        "title": "配置搜索增强",
+        "title": "%command.configureTextSearch.title%",
         "icon": "$(settings-gear)"
       },
       {
         "command": "smartReferences.replaceAllTextSearchResults",
-        "title": "顺序替换当前结果",
+        "title": "%command.replaceAllTextSearchResults.title%",
         "icon": "$(replace-all)"
       },
       {
+        "command": "smartReferences.undoLastTextSearchReplace",
+        "title": "%command.undoLastTextSearchReplace.title%",
+        "icon": "$(undo)"
+      },
+      {
         "command": "smartReferences.replaceTextSearchMatch",
-        "title": "替换当前命中",
+        "title": "%command.replaceTextSearchMatch.title%",
         "icon": "$(replace)"
       },
       {
+        "command": "smartReferences.toggleTextSearchMatchCaseActive",
+        "title": "%command.toggleTextSearchMatchCase.title%",
+        "icon": {
+          "light": "images/text-search/case-active-light.svg",
+          "dark": "images/text-search/case-active-dark.svg"
+        }
+      },
+      {
+        "command": "smartReferences.toggleTextSearchWholeWordActive",
+        "title": "%command.toggleTextSearchWholeWord.title%",
+        "icon": {
+          "light": "images/text-search/word-active-light.svg",
+          "dark": "images/text-search/word-active-dark.svg"
+        }
+      },
+      {
+        "command": "smartReferences.toggleTextSearchRegexActive",
+        "title": "%command.toggleTextSearchRegex.title%",
+        "icon": {
+          "light": "images/text-search/regex-active-light.svg",
+          "dark": "images/text-search/regex-active-dark.svg"
+        }
+      },
+      {
         "command": "smartReferences.toggleTextSearchMatchCase",
-        "title": "切换搜索增强大小写",
+        "title": "%command.toggleTextSearchMatchCase.title%",
         "icon": "$(case-sensitive)"
       },
       {
         "command": "smartReferences.toggleTextSearchWholeWord",
-        "title": "切换搜索增强整词",
+        "title": "%command.toggleTextSearchWholeWord.title%",
         "icon": "$(whole-word)"
       },
       {
         "command": "smartReferences.toggleTextSearchRegex",
-        "title": "切换搜索增强正则",
+        "title": "%command.toggleTextSearchRegex.title%",
         "icon": "$(regex)"
       },
       {
         "command": "smartReferences.replaceTextSearchSection",
-        "title": "替换当前分组",
+        "title": "%command.replaceTextSearchSection.title%",
         "icon": "$(replace-all)"
       },
       {
         "command": "smartReferences.replaceTextSearchFile",
-        "title": "替换当前文件",
+        "title": "%command.replaceTextSearchFile.title%",
         "icon": "$(replace-all)"
       },
       {
         "command": "smartReferences.setTextSearchInclude",
-        "title": "设置搜索增强包含文件",
+        "title": "%command.setTextSearchInclude.title%",
         "icon": "$(filter)"
       },
       {
+        "command": "smartReferences.setTextSearchIncludeActive",
+        "title": "%command.setTextSearchInclude.title%",
+        "icon": {
+          "light": "images/text-search/filter-active-light.svg",
+          "dark": "images/text-search/filter-active-dark.svg"
+        }
+      },
+      {
         "command": "smartReferences.setTextSearchExclude",
-        "title": "设置搜索增强排除文件",
-        "icon": "$(close)"
+        "title": "%command.setTextSearchExclude.title%",
+        "icon": {
+          "light": "images/text-search/exclude-light.svg",
+          "dark": "images/text-search/exclude-dark.svg"
+        }
+      },
+      {
+        "command": "smartReferences.setTextSearchExcludeActive",
+        "title": "%command.setTextSearchExclude.title%",
+        "icon": {
+          "light": "images/text-search/exclude-active-light.svg",
+          "dark": "images/text-search/exclude-active-dark.svg"
+        }
       },
       {
         "command": "smartReferences.toggleTextSearchFuzzy",
-        "title": "切换搜索增强模糊搜索",
+        "title": "%command.toggleTextSearchFuzzy.title%",
         "icon": "$(symbol-string)"
       },
       {
-        "command": "smartReferences.setTextSearchBeforeContext",
-        "title": "设置搜索增强上文行数",
-        "icon": "$(arrow-up)"
-      },
-      {
-        "command": "smartReferences.setTextSearchAfterContext",
-        "title": "设置搜索增强下文行数",
-        "icon": "$(arrow-down)"
+        "command": "smartReferences.toggleTextSearchFuzzyActive",
+        "title": "%command.toggleTextSearchFuzzy.title%",
+        "icon": {
+          "light": "images/text-search/fuzzy-active-light.svg",
+          "dark": "images/text-search/fuzzy-active-dark.svg"
+        }
       }
     ],
     "keybindings": [
@@ -443,7 +489,7 @@
         },
         {
           "command": "smartReferences.showStructure",
-          "group": "navigation@10",
+          "group": "navigation@8",
           "when": "editorTextFocus"
         }
       ],
@@ -520,58 +566,83 @@
         },
         {
           "command": "smartReferences.setTextSearchInclude",
-          "when": "view == textSearchTree",
+          "when": "view == textSearchTree && !smartReferences.textSearchIncludeSet",
+          "group": "navigation@2"
+        },
+        {
+          "command": "smartReferences.setTextSearchIncludeActive",
+          "when": "view == textSearchTree && smartReferences.textSearchIncludeSet",
           "group": "navigation@2"
         },
         {
           "command": "smartReferences.setTextSearchExclude",
-          "when": "view == textSearchTree",
+          "when": "view == textSearchTree && !smartReferences.textSearchExcludeSet",
+          "group": "navigation@3"
+        },
+        {
+          "command": "smartReferences.setTextSearchExcludeActive",
+          "when": "view == textSearchTree && smartReferences.textSearchExcludeSet",
           "group": "navigation@3"
         },
         {
           "command": "smartReferences.toggleTextSearchMatchCase",
-          "when": "view == textSearchTree",
+          "when": "view == textSearchTree && !smartReferences.textSearchMatchCase",
+          "group": "navigation@4"
+        },
+        {
+          "command": "smartReferences.toggleTextSearchMatchCaseActive",
+          "when": "view == textSearchTree && smartReferences.textSearchMatchCase",
           "group": "navigation@4"
         },
         {
           "command": "smartReferences.toggleTextSearchWholeWord",
-          "when": "view == textSearchTree",
+          "when": "view == textSearchTree && !smartReferences.textSearchWholeWord",
+          "group": "navigation@5"
+        },
+        {
+          "command": "smartReferences.toggleTextSearchWholeWordActive",
+          "when": "view == textSearchTree && smartReferences.textSearchWholeWord",
           "group": "navigation@5"
         },
         {
           "command": "smartReferences.toggleTextSearchRegex",
-          "when": "view == textSearchTree",
+          "when": "view == textSearchTree && !smartReferences.textSearchRegex",
+          "group": "navigation@6"
+        },
+        {
+          "command": "smartReferences.toggleTextSearchRegexActive",
+          "when": "view == textSearchTree && smartReferences.textSearchRegex",
           "group": "navigation@6"
         },
         {
           "command": "smartReferences.toggleTextSearchFuzzy",
-          "when": "view == textSearchTree",
+          "when": "view == textSearchTree && !smartReferences.textSearchFuzzy",
           "group": "navigation@7"
         },
         {
-          "command": "smartReferences.setTextSearchBeforeContext",
-          "when": "view == textSearchTree",
-          "group": "navigation@8"
-        },
-        {
-          "command": "smartReferences.setTextSearchAfterContext",
-          "when": "view == textSearchTree",
-          "group": "navigation@9"
+          "command": "smartReferences.toggleTextSearchFuzzyActive",
+          "when": "view == textSearchTree && smartReferences.textSearchFuzzy",
+          "group": "navigation@7"
         },
         {
           "command": "smartReferences.setTextSearchGrouping",
           "when": "view == textSearchTree",
-          "group": "navigation@10"
+          "group": "navigation@8"
         },
         {
           "command": "smartReferences.refreshTextSearch",
           "when": "view == textSearchTree",
-          "group": "navigation@11"
+          "group": "navigation@9"
         },
         {
           "command": "smartReferences.replaceAllTextSearchResults",
           "when": "view == textSearchTree",
-          "group": "navigation@12"
+          "group": "navigation@10"
+        },
+        {
+          "command": "smartReferences.undoLastTextSearchReplace",
+          "when": "view == textSearchTree && smartReferences.canUndoTextSearchReplace",
+          "group": "navigation@1.5"
         }
       ]
     },
@@ -579,14 +650,14 @@
       "activitybar": [
         {
           "id": "smartReferences",
-          "title": "IntelliJ-Style References",
+          "title": "%viewContainer.smartReferences.title%",
           "icon": "images/icon.svg"
         }
       ],
       "panel": [
         {
           "id": "smartReferencesSearchPanel",
-          "title": "搜索增强",
+          "title": "%viewContainer.searchPanel.title%",
           "icon": "images/icon.svg"
         }
       ]
@@ -619,7 +690,7 @@
       "smartReferencesSearchPanel": [
         {
           "id": "textSearchTree",
-          "name": "搜索增强"
+          "name": "%view.textSearchTree.name%"
         }
       ]
     },
@@ -646,7 +717,7 @@
       },
       {
         "view": "textSearchTree",
-        "contents": "还没有搜索结果。\n\n运行 [搜索增强](command:smartReferences.searchText) 开始搜索。"
+        "contents": "%viewsWelcome.textSearchTree.contents%"
       }
     ],
     "colors": [
@@ -785,7 +856,7 @@
           "items": {
             "type": "string"
           },
-          "description": "搜索增强额外包含的 glob 规则；为空时不额外限制。"
+          "description": "%config.textSearch.includeGlobs.description%"
         },
         "smartReferences.textSearch.excludeGlobs": {
           "type": "array",
@@ -793,36 +864,36 @@
           "items": {
             "type": "string"
           },
-          "description": "搜索增强额外排除的 glob 规则，会叠加在 VS Code 的 search.exclude 和 files.exclude 之上。"
+          "description": "%config.textSearch.excludeGlobs.description%"
         },
         "smartReferences.textSearch.fuzzySearch": {
           "type": "boolean",
           "default": false,
-          "description": "是否为搜索增强启用模糊子序列匹配；默认关闭。"
+          "description": "%config.textSearch.fuzzySearch.description%"
         },
         "smartReferences.textSearch.groupCodeAndComments": {
           "type": "boolean",
           "default": true,
-          "description": "是否把搜索增强结果按代码命中和注释命中分组。"
+          "description": "%config.textSearch.groupCodeAndComments.description%"
         },
         "smartReferences.textSearch.groupConfigAndCodeFiles": {
           "type": "boolean",
           "default": true,
-          "description": "是否把搜索增强结果按配置文件和代码文件分组。"
+          "description": "%config.textSearch.groupConfigAndCodeFiles.description%"
         },
         "smartReferences.textSearch.maxFuzzyFileScan": {
           "type": "number",
           "default": 2000,
           "minimum": 100,
           "maximum": 20000,
-          "description": "搜索增强在模糊搜索模式下最多扫描多少个文件。"
+          "description": "%config.textSearch.maxFuzzyFileScan.description%"
         },
         "smartReferences.textSearch.maxFuzzyMatches": {
           "type": "number",
           "default": 1000,
           "minimum": 50,
           "maximum": 20000,
-          "description": "搜索增强在模糊搜索模式下最多收集多少条命中。"
+          "description": "%config.textSearch.maxFuzzyMatches.description%"
         }
       }
     }

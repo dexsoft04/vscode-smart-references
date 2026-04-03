@@ -32,6 +32,7 @@ import { ImplInlayHintsProvider } from './providers/ImplInlayHintsProvider';
 import { TranslationManager } from './providers/TranslationManager';
 import { ProtoWorkspaceNavigator } from './core/ProtoWorkspaceNavigator';
 import { ProtoSymbolNavigationProvider } from './providers/ProtoSymbolNavigationProvider';
+import { t } from './i18n';
 
 export function activate(context: vscode.ExtensionContext): void {
   const outputChannel = vscode.window.createOutputChannel('IntelliJ-Style References');
@@ -533,15 +534,122 @@ export function activate(context: vscode.ExtensionContext): void {
 
   interface ReplacementFileContext {
     readonly uri: vscode.Uri;
+    readonly originalText: string;
     readonly originalLineOffsets: number[];
     currentLineOffsets: number[];
     workingText: string;
     applied: Array<{ originalStart: number; delta: number }>;
   }
 
+  interface ReplacementSessionOperation {
+    readonly uri: string;
+    readonly relativePath: string;
+    readonly lineNumber: number;
+    readonly appliedLineNumber: number;
+    readonly matchedText: string;
+    readonly replacementText: string;
+  }
+
+  interface ReplacementSessionFileSnapshot {
+    readonly uri: string;
+    readonly relativePath: string;
+    readonly beforeText: string;
+    readonly afterText: string;
+  }
+
+  interface ReplacementSessionRecord {
+    readonly id: string;
+    readonly startedAt: string;
+    readonly completedAt: string;
+    readonly mode: 'single' | 'all';
+    readonly query: string;
+    readonly replaceText: string;
+    readonly regex: boolean;
+    readonly matchCase: boolean;
+    readonly matchWholeWord: boolean;
+    readonly appliedCount: number;
+    readonly files: ReplacementSessionFileSnapshot[];
+    readonly operations: ReplacementSessionOperation[];
+    readonly stoppedReason?: string;
+    undoneAt?: string;
+  }
+
+  const textSearchReplaceHistoryKey = 'smartReferences.textSearch.replaceHistory';
+  const maxTextSearchReplaceHistory = 20;
+  let textSearchReplaceHistory = context.workspaceState.get<ReplacementSessionRecord[]>(textSearchReplaceHistoryKey, []);
+
+  const updateTextSearchUndoContext = (): void => {
+    void vscode.commands.executeCommand(
+      'setContext',
+      'smartReferences.canUndoTextSearchReplace',
+      textSearchReplaceHistory.some(session => !session.undoneAt),
+    );
+  };
+
+  const persistTextSearchReplaceHistory = async (): Promise<void> => {
+    await context.workspaceState.update(textSearchReplaceHistoryKey, textSearchReplaceHistory);
+    updateTextSearchUndoContext();
+  };
+
+  const appendTextSearchReplaceHistory = async (session: ReplacementSessionRecord): Promise<void> => {
+    textSearchReplaceHistory = [session, ...textSearchReplaceHistory.filter(item => item.id !== session.id)].slice(0, maxTextSearchReplaceHistory);
+    await persistTextSearchReplaceHistory();
+  };
+
+  const markTextSearchReplaceSessionUndone = async (sessionId: string): Promise<void> => {
+    textSearchReplaceHistory = textSearchReplaceHistory.map(session => (
+      session.id === sessionId ? { ...session, undoneAt: new Date().toISOString() } : session
+    ));
+    await persistTextSearchReplaceHistory();
+  };
+
+  const getLastUndoableTextSearchReplaceSession = (): ReplacementSessionRecord | undefined => (
+    textSearchReplaceHistory.find(session => !session.undoneAt && session.appliedCount > 0)
+  );
+
+  const createTextSearchReplaceSessionId = (): string => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+  const buildUndoReplaceDetail = (session: ReplacementSessionRecord): string => {
+    const linesByFile = new Map<string, number[]>();
+    for (const operation of session.operations) {
+      const lines = linesByFile.get(operation.relativePath) ?? [];
+      lines.push(operation.appliedLineNumber ?? operation.lineNumber);
+      linesByFile.set(operation.relativePath, lines);
+    }
+    const entries = [...linesByFile.entries()]
+      .map(([relativePath, lines]) => {
+        const uniqueLines = [...new Set(lines)].sort((a, b) => a - b);
+        const preview = uniqueLines.slice(0, 8).join(', ');
+        const suffix = uniqueLines.length > 8
+          ? t(` 等 ${uniqueLines.length} 行`, ` and ${uniqueLines.length - 8} more`)
+          : '';
+        return `${relativePath}: ${preview}${suffix}`;
+      })
+      .slice(0, 8);
+    const extraFiles = linesByFile.size - entries.length;
+    return [
+      t('只有当这些文件仍保持该批替换后的内容时，才会执行安全回滚。', 'Safe rollback runs only when these files still match the post-replacement content from this batch.'),
+      ...entries,
+      ...(extraFiles > 0 ? [t(`其余 ${extraFiles} 个文件未展开。`, `${extraFiles} more files are not expanded.`)] : []),
+    ].join('\n');
+  };
+
+  updateTextSearchUndoContext();
+
   const focusTextSearchView = async (): Promise<void> => {
     await vscode.commands.executeCommand('textSearchTree.focus');
   };
+
+  const updateTextSearchOptionContexts = (): void => {
+    void vscode.commands.executeCommand('setContext', 'smartReferences.textSearchIncludeSet', Boolean(textSearchDraftRequest.include));
+    void vscode.commands.executeCommand('setContext', 'smartReferences.textSearchExcludeSet', Boolean(textSearchDraftRequest.exclude));
+    void vscode.commands.executeCommand('setContext', 'smartReferences.textSearchMatchCase', textSearchDraftRequest.matchCase);
+    void vscode.commands.executeCommand('setContext', 'smartReferences.textSearchWholeWord', textSearchDraftRequest.matchWholeWord);
+    void vscode.commands.executeCommand('setContext', 'smartReferences.textSearchRegex', textSearchDraftRequest.useRegExp);
+    void vscode.commands.executeCommand('setContext', 'smartReferences.textSearchFuzzy', textSearchDraftRequest.fuzzySearch);
+  };
+
+  updateTextSearchOptionContexts();
 
   const buildLineOffsets = (value: string): number[] => {
     const offsets = [0];
@@ -607,6 +715,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const initialLineOffsets = buildLineOffsets(originalText);
     const contextForFile: ReplacementFileContext = {
       uri,
+      originalText,
       originalLineOffsets: initialLineOffsets,
       currentLineOffsets: initialLineOffsets,
       workingText: originalText,
@@ -622,6 +731,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const applied = await textSearchProvider.search(request);
       if (applied) {
         textSearchDraftRequest = { ...request };
+        updateTextSearchOptionContexts();
         showTextSearchWarning();
       }
       return applied;
@@ -629,9 +739,9 @@ export function activate(context: vscode.ExtensionContext): void {
       if (isTextSearchCancelled(err)) return false;
       const message = String(err);
       if (message.includes('ENOENT')) {
-        vscode.window.showErrorMessage('搜索增强需要系统 PATH 中可用的 ripgrep (`rg`)。');
+        vscode.window.showErrorMessage(t('搜索增强需要系统 PATH 中可用的 ripgrep (`rg`)。', 'Search Enhancement requires ripgrep (`rg`) to be available in the system PATH.'));
       } else {
-        vscode.window.showErrorMessage(`搜索增强错误: ${message}`);
+        vscode.window.showErrorMessage(`${t('搜索增强错误', 'Search Enhancement Error')}: ${message}`);
       }
       return false;
     }
@@ -642,36 +752,50 @@ export function activate(context: vscode.ExtensionContext): void {
       const applied = await textSearchProvider.refresh();
       if (applied) {
         textSearchDraftRequest = textSearchProvider.getEditableRequest();
+        updateTextSearchOptionContexts();
         if (showWarning) showTextSearchWarning();
       }
     } catch (err) {
       if (isTextSearchCancelled(err)) return;
       const message = String(err);
       if (message.includes('ENOENT')) {
-        vscode.window.showErrorMessage('搜索增强需要系统 PATH 中可用的 ripgrep (`rg`)。');
+        vscode.window.showErrorMessage(t('搜索增强需要系统 PATH 中可用的 ripgrep (`rg`)。', 'Search Enhancement requires ripgrep (`rg`) to be available in the system PATH.'));
       } else {
-        vscode.window.showErrorMessage(`搜索增强错误: ${message}`);
+        vscode.window.showErrorMessage(`${t('搜索增强错误', 'Search Enhancement Error')}: ${message}`);
       }
     }
   };
 
   const promptReplaceText = async (initialValue: string): Promise<string | undefined> => {
     return await vscode.window.showInputBox({
-      prompt: '替换为',
+      prompt: t('替换为', 'Replace with'),
       value: initialValue,
       ignoreFocusOut: true,
     });
   };
 
+  const confirmTextSearchReplace = async (
+    replaceText: string,
+    detailLabel: string,
+    confirmLabel: string,
+  ): Promise<boolean> => {
+    const answer = await vscode.window.showWarningMessage(
+      `${t('确认将', 'Replace')} ${detailLabel} ${t('替换为', 'with')} ${JSON.stringify(replaceText)}?`,
+      { modal: true, detail: t('替换会按当前显示顺序执行，遇到第一处失败立即停止。', 'Replacement runs in the current display order and stops at the first failure.') },
+      confirmLabel,
+    );
+    return answer === confirmLabel;
+  };
+
   const getCurrentTextSearchQuery = (): string => (textSearchProvider.getSearchRequest()?.query ?? textSearchDraftRequest.query).trim();
   const getTextSearchGroupingLabel = (mode: TextSearchGroupingMode = textSearchProvider.getGroupingMode()): string => (
     mode === 'none'
-      ? '无分组'
+      ? t('无分组', 'No Grouping')
       : mode === 'content'
-        ? '代码 / 注释'
+        ? t('代码 / 注释', 'Code / Comments')
         : mode === 'fileKind'
-          ? '代码 / 配置文件'
-          : '组合分组'
+          ? t('代码 / 配置文件', 'Code / Config Files')
+          : t('组合分组', 'Combined Grouping')
   );
 
   const applyTextSearchDraft = async (
@@ -680,6 +804,7 @@ export function activate(context: vscode.ExtensionContext): void {
     queryOverride?: string,
   ): Promise<boolean> => {
     textSearchDraftRequest = nextDraft;
+    updateTextSearchOptionContexts();
     const nextQuery = queryOverride !== undefined ? queryOverride.trim() : getCurrentTextSearchQuery();
     if (nextQuery) {
       return await runTextSearch({ ...nextDraft, query: nextQuery });
@@ -691,7 +816,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const setTextSearchInclude = async (queryOverride?: string): Promise<boolean> => {
     await focusTextSearchView();
     const include = await vscode.window.showInputBox({
-      prompt: '包含文件 Glob，留空表示不限制',
+      prompt: t('包含文件 Glob，留空表示不限制', 'Include file glob. Leave empty for no extra limit.'),
       value: textSearchDraftRequest.include,
       ignoreFocusOut: true,
     });
@@ -699,7 +824,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const value = include.trim();
     return await applyTextSearchDraft(
       { ...textSearchDraftRequest, include: value },
-      value ? `搜索增强已设置包含文件: ${value}` : '搜索增强已清除包含文件限制。',
+      value ? `${t('搜索增强已设置包含文件', 'Search Enhancement include set')}: ${value}` : t('搜索增强已清除包含文件限制。', 'Search Enhancement include filter cleared.'),
       queryOverride,
     );
   };
@@ -707,7 +832,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const setTextSearchExclude = async (queryOverride?: string): Promise<boolean> => {
     await focusTextSearchView();
     const exclude = await vscode.window.showInputBox({
-      prompt: '排除文件 Glob，留空表示不额外排除',
+      prompt: t('排除文件 Glob，留空表示不额外排除', 'Exclude file glob. Leave empty for no extra exclude.'),
       value: textSearchDraftRequest.exclude,
       ignoreFocusOut: true,
     });
@@ -715,7 +840,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const value = exclude.trim();
     return await applyTextSearchDraft(
       { ...textSearchDraftRequest, exclude: value },
-      value ? `搜索增强已设置排除文件: ${value}` : '搜索增强已清除额外排除规则。',
+      value ? `${t('搜索增强已设置排除文件', 'Search Enhancement exclude set')}: ${value}` : t('搜索增强已清除额外排除规则。', 'Search Enhancement extra exclude cleared.'),
       queryOverride,
     );
   };
@@ -725,7 +850,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const before = textSearchDraftRequest.matchCase;
     return await applyTextSearchDraft(
       { ...textSearchDraftRequest, matchCase: !textSearchDraftRequest.matchCase },
-      before ? '搜索增强已关闭区分大小写。' : '搜索增强已开启区分大小写。',
+      before ? t('搜索增强已关闭区分大小写。', 'Search Enhancement match case disabled.') : t('搜索增强已开启区分大小写。', 'Search Enhancement match case enabled.'),
       queryOverride,
     );
   };
@@ -733,13 +858,13 @@ export function activate(context: vscode.ExtensionContext): void {
   const toggleTextSearchWholeWord = async (queryOverride?: string): Promise<boolean> => {
     await focusTextSearchView();
     if (textSearchDraftRequest.fuzzySearch) {
-      void vscode.window.showWarningMessage('模糊搜索不支持整词匹配，请先关闭模糊搜索。');
+      void vscode.window.showWarningMessage(t('模糊搜索不支持整词匹配，请先关闭模糊搜索。', 'Fuzzy search does not support whole-word matching. Turn off fuzzy search first.'));
       return false;
     }
     const before = textSearchDraftRequest.matchWholeWord;
     return await applyTextSearchDraft(
       { ...textSearchDraftRequest, matchWholeWord: !textSearchDraftRequest.matchWholeWord },
-      before ? '搜索增强已关闭整词匹配。' : '搜索增强已开启整词匹配。',
+      before ? t('搜索增强已关闭整词匹配。', 'Search Enhancement whole-word matching disabled.') : t('搜索增强已开启整词匹配。', 'Search Enhancement whole-word matching enabled.'),
       queryOverride,
     );
   };
@@ -753,7 +878,7 @@ export function activate(context: vscode.ExtensionContext): void {
         useRegExp: !textSearchDraftRequest.useRegExp,
         fuzzySearch: !textSearchDraftRequest.useRegExp ? false : textSearchDraftRequest.fuzzySearch,
       },
-      before ? '搜索增强已关闭正则搜索。' : '搜索增强已开启正则搜索。',
+      before ? t('搜索增强已关闭正则搜索。', 'Search Enhancement regex disabled.') : t('搜索增强已开启正则搜索。', 'Search Enhancement regex enabled.'),
       queryOverride,
     );
   };
@@ -768,39 +893,7 @@ export function activate(context: vscode.ExtensionContext): void {
         useRegExp: !textSearchDraftRequest.fuzzySearch ? false : textSearchDraftRequest.useRegExp,
         matchWholeWord: !textSearchDraftRequest.fuzzySearch ? false : textSearchDraftRequest.matchWholeWord,
       },
-      before ? '搜索增强已关闭模糊搜索。' : '搜索增强已开启模糊搜索。',
-      queryOverride,
-    );
-  };
-
-  const setTextSearchBeforeContext = async (queryOverride?: string): Promise<boolean> => {
-    await focusTextSearchView();
-    const beforeContext = await vscode.window.showInputBox({
-      prompt: '上文行数',
-      value: String(textSearchDraftRequest.beforeContextLines),
-      ignoreFocusOut: true,
-      validateInput: value => /^\d+$/.test(value) && Number(value) <= 20 ? null : '请输入 0-20 之间的整数',
-    });
-    if (beforeContext === undefined) return false;
-    return await applyTextSearchDraft(
-      { ...textSearchDraftRequest, beforeContextLines: Number(beforeContext) },
-      `搜索增强已设置上文行数: ${beforeContext}`,
-      queryOverride,
-    );
-  };
-
-  const setTextSearchAfterContext = async (queryOverride?: string): Promise<boolean> => {
-    await focusTextSearchView();
-    const afterContext = await vscode.window.showInputBox({
-      prompt: '下文行数',
-      value: String(textSearchDraftRequest.afterContextLines),
-      ignoreFocusOut: true,
-      validateInput: value => /^\d+$/.test(value) && Number(value) <= 20 ? null : '请输入 0-20 之间的整数',
-    });
-    if (afterContext === undefined) return false;
-    return await applyTextSearchDraft(
-      { ...textSearchDraftRequest, afterContextLines: Number(afterContext) },
-      `搜索增强已设置下文行数: ${afterContext}`,
+      before ? t('搜索增强已关闭模糊搜索。', 'Search Enhancement fuzzy search disabled.') : t('搜索增强已开启模糊搜索。', 'Search Enhancement fuzzy search enabled.'),
       queryOverride,
     );
   };
@@ -808,13 +901,13 @@ export function activate(context: vscode.ExtensionContext): void {
   const setTextSearchGrouping = async (queryOverride?: string): Promise<boolean> => {
     await focusTextSearchView();
     const items: Array<{ label: string; description: string; mode: TextSearchGroupingMode }> = [
-      { label: '无分组', description: '按文件直接显示', mode: 'none' },
-      { label: '代码 / 注释', description: '区分代码和注释命中', mode: 'content' },
-      { label: '代码 / 配置文件', description: '区分代码文件和配置文件', mode: 'fileKind' },
-      { label: '组合分组', description: '同时按内容和文件类型分组', mode: 'both' },
+      { label: t('无分组', 'No Grouping'), description: t('按文件直接显示', 'Show directly by file'), mode: 'none' },
+      { label: t('代码 / 注释', 'Code / Comments'), description: t('区分代码和注释命中', 'Separate code and comment matches'), mode: 'content' },
+      { label: t('代码 / 配置文件', 'Code / Config Files'), description: t('区分代码文件和配置文件', 'Separate code files and config files'), mode: 'fileKind' },
+      { label: t('组合分组', 'Combined Grouping'), description: t('同时按内容和文件类型分组', 'Group by content and file type together'), mode: 'both' },
     ];
     const pick = await vscode.window.showQuickPick(items, {
-      placeHolder: '选择搜索结果分组方式',
+      placeHolder: t('选择搜索结果分组方式', 'Choose result grouping mode'),
       ignoreFocusOut: true,
     });
     if (!pick) return false;
@@ -823,24 +916,22 @@ export function activate(context: vscode.ExtensionContext): void {
     if (nextQuery) {
       return await runTextSearch({ ...textSearchDraftRequest, query: nextQuery });
     }
-    void vscode.window.showInformationMessage(`搜索增强已切换分组: ${getTextSearchGroupingLabel(pick.mode)}`);
+    void vscode.window.showInformationMessage(`${t('搜索增强已切换分组', 'Search Enhancement grouping changed')}: ${getTextSearchGroupingLabel(pick.mode)}`);
     return true;
   };
 
   const configureTextSearch = async (queryOverride?: string): Promise<boolean> => {
     const items = [
-      { label: '包含文件', description: textSearchDraftRequest.include || '未设置', action: 'include' as const },
-      { label: '排除文件', description: textSearchDraftRequest.exclude || '未设置', action: 'exclude' as const },
-      { label: '区分大小写', description: textSearchDraftRequest.matchCase ? '已开启' : '已关闭', action: 'matchCase' as const },
-      { label: '整词匹配', description: textSearchDraftRequest.matchWholeWord ? '已开启' : '已关闭', action: 'wholeWord' as const },
-      { label: '正则搜索', description: textSearchDraftRequest.useRegExp ? '已开启' : '已关闭', action: 'regex' as const },
-      { label: '模糊搜索', description: textSearchDraftRequest.fuzzySearch ? '已开启' : '已关闭', action: 'fuzzy' as const },
-      { label: '上文行数', description: String(textSearchDraftRequest.beforeContextLines), action: 'before' as const },
-      { label: '下文行数', description: String(textSearchDraftRequest.afterContextLines), action: 'after' as const },
-      { label: '结果分组', description: getTextSearchGroupingLabel(), action: 'grouping' as const },
+      { label: t('包含文件', 'Include Files'), description: textSearchDraftRequest.include || t('未设置', 'Not set'), action: 'include' as const },
+      { label: t('排除文件', 'Exclude Files'), description: textSearchDraftRequest.exclude || t('未设置', 'Not set'), action: 'exclude' as const },
+      { label: t('区分大小写', 'Match Case'), description: textSearchDraftRequest.matchCase ? t('已开启', 'Enabled') : t('已关闭', 'Disabled'), action: 'matchCase' as const },
+      { label: t('整词匹配', 'Whole Word'), description: textSearchDraftRequest.matchWholeWord ? t('已开启', 'Enabled') : t('已关闭', 'Disabled'), action: 'wholeWord' as const },
+      { label: t('正则搜索', 'Regex'), description: textSearchDraftRequest.useRegExp ? t('已开启', 'Enabled') : t('已关闭', 'Disabled'), action: 'regex' as const },
+      { label: t('模糊搜索', 'Fuzzy Search'), description: textSearchDraftRequest.fuzzySearch ? t('已开启', 'Enabled') : t('已关闭', 'Disabled'), action: 'fuzzy' as const },
+      { label: t('结果分组', 'Grouping'), description: getTextSearchGroupingLabel(), action: 'grouping' as const },
     ];
     const pick = await vscode.window.showQuickPick(items, {
-      placeHolder: '选择要调整的一项搜索设置',
+      placeHolder: t('选择要调整的一项搜索设置', 'Choose one search setting to adjust'),
       ignoreFocusOut: true,
     });
     if (!pick) return false;
@@ -850,29 +941,48 @@ export function activate(context: vscode.ExtensionContext): void {
     if (pick.action === 'wholeWord') return await toggleTextSearchWholeWord(queryOverride);
     if (pick.action === 'regex') return await toggleTextSearchRegex(queryOverride);
     if (pick.action === 'fuzzy') return await toggleTextSearchFuzzy(queryOverride);
-    if (pick.action === 'before') return await setTextSearchBeforeContext(queryOverride);
-    if (pick.action === 'after') return await setTextSearchAfterContext(queryOverride);
     return await setTextSearchGrouping(queryOverride);
   };
 
+  const createTextSearchIconPath = (name: string): { light: vscode.Uri; dark: vscode.Uri } => ({
+    light: vscode.Uri.file(path.join(context.extensionPath, 'images', 'text-search', `${name}-light.svg`)),
+    dark: vscode.Uri.file(path.join(context.extensionPath, 'images', 'text-search', `${name}-dark.svg`)),
+  });
+
   const promptTextSearchQuery = async (initialValue: string): Promise<{ kind: string; query: string } | undefined> => {
     const input = vscode.window.createInputBox();
-    input.title = '搜索增强';
-    input.prompt = '搜索内容';
-    input.placeholder = '输入要搜索的文本';
+    input.title = t('搜索增强', 'Search Enhancement');
+    input.prompt = t('搜索内容', 'Search');
+    input.placeholder = t('输入要搜索的文本', 'Enter text to search');
     input.value = initialValue;
     input.ignoreFocusOut = true;
 
     const buttons = {
-      include: { iconPath: new vscode.ThemeIcon('filter'), tooltip: `包含文件: ${textSearchDraftRequest.include || '未设置'}` },
-      exclude: { iconPath: new vscode.ThemeIcon('close'), tooltip: `排除文件: ${textSearchDraftRequest.exclude || '未设置'}` },
-      matchCase: { iconPath: new vscode.ThemeIcon('case-sensitive'), tooltip: `区分大小写: ${textSearchDraftRequest.matchCase ? '开' : '关'}` },
-      wholeWord: { iconPath: new vscode.ThemeIcon('whole-word'), tooltip: `整词匹配: ${textSearchDraftRequest.matchWholeWord ? '开' : '关'}` },
-      regex: { iconPath: new vscode.ThemeIcon('regex'), tooltip: `正则搜索: ${textSearchDraftRequest.useRegExp ? '开' : '关'}` },
-      fuzzy: { iconPath: new vscode.ThemeIcon('symbol-string'), tooltip: `模糊搜索: ${textSearchDraftRequest.fuzzySearch ? '开' : '关'}` },
-      beforeContext: { iconPath: new vscode.ThemeIcon('arrow-up'), tooltip: `上文行数: ${textSearchDraftRequest.beforeContextLines}` },
-      afterContext: { iconPath: new vscode.ThemeIcon('arrow-down'), tooltip: `下文行数: ${textSearchDraftRequest.afterContextLines}` },
-      grouping: { iconPath: new vscode.ThemeIcon('list-tree'), tooltip: `结果分组: ${getTextSearchGroupingLabel()}` },
+      include: {
+        iconPath: textSearchDraftRequest.include ? createTextSearchIconPath('filter-active') : new vscode.ThemeIcon('filter'),
+        tooltip: `${t('包含文件', 'Include Files')}: ${textSearchDraftRequest.include || t('未设置', 'Not set')}`,
+      },
+      exclude: {
+        iconPath: textSearchDraftRequest.exclude ? createTextSearchIconPath('exclude-active') : createTextSearchIconPath('exclude'),
+        tooltip: `${t('排除文件', 'Exclude Files')}: ${textSearchDraftRequest.exclude || t('未设置', 'Not set')}`,
+      },
+      matchCase: {
+        iconPath: textSearchDraftRequest.matchCase ? createTextSearchIconPath('case-active') : new vscode.ThemeIcon('case-sensitive'),
+        tooltip: `${t('区分大小写', 'Match Case')}: ${textSearchDraftRequest.matchCase ? t('开', 'On') : t('关', 'Off')}`,
+      },
+      wholeWord: {
+        iconPath: textSearchDraftRequest.matchWholeWord ? createTextSearchIconPath('word-active') : new vscode.ThemeIcon('whole-word'),
+        tooltip: `${t('整词匹配', 'Whole Word')}: ${textSearchDraftRequest.matchWholeWord ? t('开', 'On') : t('关', 'Off')}`,
+      },
+      regex: {
+        iconPath: textSearchDraftRequest.useRegExp ? createTextSearchIconPath('regex-active') : new vscode.ThemeIcon('regex'),
+        tooltip: `${t('正则搜索', 'Regex')}: ${textSearchDraftRequest.useRegExp ? t('开', 'On') : t('关', 'Off')}`,
+      },
+      fuzzy: {
+        iconPath: textSearchDraftRequest.fuzzySearch ? createTextSearchIconPath('fuzzy-active') : new vscode.ThemeIcon('symbol-string'),
+        tooltip: `${t('模糊搜索', 'Fuzzy Search')}: ${textSearchDraftRequest.fuzzySearch ? t('开', 'On') : t('关', 'Off')}`,
+      },
+      grouping: { iconPath: new vscode.ThemeIcon('list-tree'), tooltip: `${t('结果分组', 'Grouping')}: ${getTextSearchGroupingLabel()}` },
     } as const;
     input.buttons = [
       buttons.include,
@@ -881,8 +991,6 @@ export function activate(context: vscode.ExtensionContext): void {
       buttons.wholeWord,
       buttons.regex,
       buttons.fuzzy,
-      buttons.beforeContext,
-      buttons.afterContext,
       buttons.grouping,
     ];
 
@@ -905,8 +1013,6 @@ export function activate(context: vscode.ExtensionContext): void {
           else if (button === buttons.wholeWord) finish({ kind: 'wholeWord', query });
           else if (button === buttons.regex) finish({ kind: 'regex', query });
           else if (button === buttons.fuzzy) finish({ kind: 'fuzzy', query });
-          else if (button === buttons.beforeContext) finish({ kind: 'beforeContext', query });
-          else if (button === buttons.afterContext) finish({ kind: 'afterContext', query });
           else if (button === buttons.grouping) finish({ kind: 'grouping', query });
         }),
         input.onDidHide(() => finish(undefined)),
@@ -922,15 +1028,47 @@ export function activate(context: vscode.ExtensionContext): void {
   ): Promise<void> => {
     if (targets.length === 0) return;
     if (request.fuzzySearch) {
-      void vscode.window.showWarningMessage('模糊搜索结果不支持替换。');
+      void vscode.window.showWarningMessage(t('模糊搜索结果不支持替换。', 'Fuzzy search results do not support replacement.'));
       return;
     }
 
     const fileContexts = new Map<string, ReplacementFileContext>();
     const startedAt = new Date().toISOString();
+    const sessionId = createTextSearchReplaceSessionId();
+    const sessionOperations: ReplacementSessionOperation[] = [];
     let completed = 0;
-    outputChannel.appendLine(`[text-search:replace] start ${startedAt} mode=${mode} files=${new Set(targets.map(target => target.uri)).size} matches=${targets.length}`);
-    outputChannel.appendLine(`[text-search:replace] query=${JSON.stringify(request.query)} regex=${request.useRegExp} case=${request.matchCase} word=${request.matchWholeWord}`);
+    outputChannel.appendLine(`[text-search:replace] start id=${sessionId} ${startedAt} mode=${mode} files=${new Set(targets.map(target => target.uri)).size} matches=${targets.length}`);
+    outputChannel.appendLine(`[text-search:replace] id=${sessionId} query=${JSON.stringify(request.query)} regex=${request.useRegExp} case=${request.matchCase} word=${request.matchWholeWord}`);
+
+    const persistReplacementSession = async (stoppedReason?: string): Promise<ReplacementSessionRecord | undefined> => {
+      if (completed === 0) return undefined;
+      const files = [...fileContexts.values()]
+        .filter(contextForFile => contextForFile.applied.length > 0)
+        .map(contextForFile => ({
+          uri: contextForFile.uri.toString(),
+          relativePath: vscode.workspace.asRelativePath(contextForFile.uri, false),
+          beforeText: contextForFile.originalText,
+          afterText: contextForFile.workingText,
+        }));
+      const session: ReplacementSessionRecord = {
+        id: sessionId,
+        startedAt,
+        completedAt: new Date().toISOString(),
+        mode,
+        query: request.query,
+        replaceText: request.replaceText,
+        regex: request.useRegExp,
+        matchCase: request.matchCase,
+        matchWholeWord: request.matchWholeWord,
+        appliedCount: completed,
+        files,
+        operations: sessionOperations,
+        stoppedReason,
+      };
+      await appendTextSearchReplaceHistory(session);
+      outputChannel.appendLine(`[text-search:replace] stored id=${sessionId} applied=${completed} files=${files.length}${stoppedReason ? ` stopped=${JSON.stringify(stoppedReason)}` : ''}`);
+      return session;
+    };
 
     try {
       for (const target of targets) {
@@ -943,8 +1081,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
         if (currentSlice !== target.matchedText) {
           const message = `stale match; expected=${JSON.stringify(target.matchedText)} actual=${JSON.stringify(currentSlice)}`;
-          outputChannel.appendLine(`[text-search:replace] fail ${target.relativePath}:${target.lineNumber} ${message}`);
-          throw new Error(`替换已在 ${target.relativePath}:${target.lineNumber} 停止: ${message}`);
+          outputChannel.appendLine(`[text-search:replace] fail id=${sessionId} ${target.relativePath}:${target.lineNumber} ${message}`);
+          throw new Error(`${t('替换已在', 'Replacement stopped at')} ${target.relativePath}:${target.lineNumber}: ${message}`);
         }
 
         const replacementText = applyReplacementText(currentSlice, request);
@@ -957,29 +1095,98 @@ export function activate(context: vscode.ExtensionContext): void {
         const applied = await vscode.workspace.applyEdit(edit);
         if (!applied) {
           const message = 'workspace.applyEdit returned false';
-          outputChannel.appendLine(`[text-search:replace] fail ${target.relativePath}:${target.lineNumber} ${message}`);
-          throw new Error(`替换已在 ${target.relativePath}:${target.lineNumber} 停止: ${message}`);
+          outputChannel.appendLine(`[text-search:replace] fail id=${sessionId} ${target.relativePath}:${target.lineNumber} ${message}`);
+          throw new Error(`${t('替换已在', 'Replacement stopped at')} ${target.relativePath}:${target.lineNumber}: ${message}`);
         }
 
         contextForFile.workingText = `${contextForFile.workingText.slice(0, adjustedStart)}${replacementText}${contextForFile.workingText.slice(adjustedEnd)}`;
         contextForFile.currentLineOffsets = buildLineOffsets(contextForFile.workingText);
         contextForFile.applied.push({ originalStart, delta: replacementText.length - currentSlice.length });
+        sessionOperations.push({
+          uri: target.uri,
+          relativePath: target.relativePath,
+          lineNumber: target.lineNumber,
+          appliedLineNumber: range.start.line + 1,
+          matchedText: currentSlice,
+          replacementText,
+        });
         completed += 1;
         outputChannel.appendLine(
-          `[text-search:replace] ok ${target.relativePath}:${target.lineNumber} match=${JSON.stringify(formatLogValue(currentSlice))} replace=${JSON.stringify(formatLogValue(replacementText))}`,
+          `[text-search:replace] ok id=${sessionId} ${target.relativePath}:${target.lineNumber} match=${JSON.stringify(formatLogValue(currentSlice))} replace=${JSON.stringify(formatLogValue(replacementText))}`,
         );
       }
-      outputChannel.appendLine(`[text-search:replace] done mode=${mode} completed=${completed}/${targets.length}`);
+      outputChannel.appendLine(`[text-search:replace] done id=${sessionId} mode=${mode} completed=${completed}/${targets.length}`);
+      await persistReplacementSession();
       textSearchDraftRequest = { ...request };
+      updateTextSearchOptionContexts();
       await refreshTextSearchResults(false);
-      void vscode.window.showInformationMessage(mode === 'single' ? '已替换 1 处命中' : `已顺序替换 ${completed} 处命中`);
+      void vscode.window.showInformationMessage(mode === 'single' ? `${t('已替换 1 处命中', 'Replaced 1 match')} (ID: ${sessionId})` : `${t('已顺序替换', 'Sequentially replaced')} ${completed} ${t('处命中', 'matches')} (ID: ${sessionId})`);
     } catch (err) {
       const message = String(err instanceof Error ? err.message : err);
-      outputChannel.appendLine(`[text-search:replace] stopped completed=${completed}/${targets.length} reason=${message}`);
+      outputChannel.appendLine(`[text-search:replace] stopped id=${sessionId} completed=${completed}/${targets.length} reason=${message}`);
+      await persistReplacementSession(message);
       await refreshTextSearchResults(false);
       void vscode.window.showErrorMessage(message);
     }
   };
+
+  const undoLastTextSearchReplaceCmd = vscode.commands.registerCommand(
+    'smartReferences.undoLastTextSearchReplace',
+    async () => {
+      await focusTextSearchView();
+      const session = getLastUndoableTextSearchReplaceSession();
+      if (!session) {
+        void vscode.window.showInformationMessage(t('当前没有可撤销的搜索增强替换。', 'There is no undoable Search Enhancement replacement right now.'));
+        return;
+      }
+      const answer = await vscode.window.showWarningMessage(
+        t(`撤销替换批次 ${session.id}，涉及 ${session.files.length} 个文件 / ${session.appliedCount} 处替换？`, `Undo replacement batch ${session.id} affecting ${session.files.length} files / ${session.appliedCount} matches?`),
+        { modal: true, detail: buildUndoReplaceDetail(session) },
+        t('撤销上次替换', 'Undo Last Replace'),
+      );
+      if (answer !== t('撤销上次替换', 'Undo Last Replace')) return;
+
+      outputChannel.appendLine(`[text-search:undo] start id=${session.id} files=${session.files.length} applied=${session.appliedCount}`);
+      outputChannel.appendLine(`[text-search:undo] id=${session.id} query=${JSON.stringify(session.query)} regex=${session.regex} case=${session.matchCase} word=${session.matchWholeWord}`);
+      try {
+        const edit = new vscode.WorkspaceEdit();
+        for (const file of session.files) {
+          const uri = vscode.Uri.parse(file.uri);
+          const document = await vscode.workspace.openTextDocument(uri);
+          const currentText = document.getText();
+          if (currentText !== file.afterText) {
+            const message = t(`文件已变化，无法安全撤销: ${file.relativePath}`, `File changed; cannot safely undo: ${file.relativePath}`);
+            outputChannel.appendLine(`[text-search:undo] fail id=${session.id} ${message}`);
+            throw new Error(message);
+          }
+          const fullRange = new vscode.Range(document.positionAt(0), document.positionAt(currentText.length));
+          edit.replace(uri, fullRange, file.beforeText);
+        }
+
+        const applied = await vscode.workspace.applyEdit(edit);
+        if (!applied) {
+          const message = 'workspace.applyEdit returned false';
+          outputChannel.appendLine(`[text-search:undo] fail id=${session.id} ${message}`);
+          throw new Error(`${t('撤销替换', 'Undo replace')} ${session.id} ${t('失败', 'failed')}: ${message}`);
+        }
+
+        for (const operation of [...session.operations].reverse()) {
+          outputChannel.appendLine(
+            `[text-search:undo] ok id=${session.id} ${operation.relativePath}:${operation.appliedLineNumber ?? operation.lineNumber} match=${JSON.stringify(formatLogValue(operation.replacementText))} replace=${JSON.stringify(formatLogValue(operation.matchedText))}`,
+          );
+        }
+
+        await markTextSearchReplaceSessionUndone(session.id);
+        outputChannel.appendLine(`[text-search:undo] done id=${session.id} files=${session.files.length} reverted=${session.operations.length}`);
+        await refreshTextSearchResults(false);
+        void vscode.window.showInformationMessage(`${t('已撤销替换批次', 'Reverted replacement batch')} ${session.id}`);
+      } catch (err) {
+        const message = String(err instanceof Error ? err.message : err);
+        outputChannel.appendLine(`[text-search:undo] stopped id=${session.id} reason=${message}`);
+        void vscode.window.showErrorMessage(message);
+      }
+    },
+  );
 
   const searchAllCmd = vscode.commands.registerCommand(
     'smartReferences.searchSymbol',
@@ -1029,14 +1236,6 @@ export function activate(context: vscode.ExtensionContext): void {
           await toggleTextSearchFuzzy(seedQuery);
           continue;
         }
-        if (result.kind === 'beforeContext') {
-          await setTextSearchBeforeContext(seedQuery);
-          continue;
-        }
-        if (result.kind === 'afterContext') {
-          await setTextSearchAfterContext(seedQuery);
-          continue;
-        }
         if (result.kind === 'grouping') {
           await setTextSearchGrouping(seedQuery);
           continue;
@@ -1046,6 +1245,7 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!query.trim()) {
           textSearchProvider.clear();
           textSearchDraftRequest = { ...request, query: '' };
+          updateTextSearchOptionContexts();
           await focusTextSearchView();
           return;
         }
@@ -1075,9 +1275,21 @@ export function activate(context: vscode.ExtensionContext): void {
       await toggleTextSearchMatchCase();
     },
   );
+  const toggleTextSearchMatchCaseActiveCmd = vscode.commands.registerCommand(
+    'smartReferences.toggleTextSearchMatchCaseActive',
+    async () => {
+      await toggleTextSearchMatchCase();
+    },
+  );
 
   const toggleTextSearchWholeWordCmd = vscode.commands.registerCommand(
     'smartReferences.toggleTextSearchWholeWord',
+    async () => {
+      await toggleTextSearchWholeWord();
+    },
+  );
+  const toggleTextSearchWholeWordActiveCmd = vscode.commands.registerCommand(
+    'smartReferences.toggleTextSearchWholeWordActive',
     async () => {
       await toggleTextSearchWholeWord();
     },
@@ -1089,9 +1301,21 @@ export function activate(context: vscode.ExtensionContext): void {
       await toggleTextSearchRegex();
     },
   );
+  const toggleTextSearchRegexActiveCmd = vscode.commands.registerCommand(
+    'smartReferences.toggleTextSearchRegexActive',
+    async () => {
+      await toggleTextSearchRegex();
+    },
+  );
 
   const setTextSearchIncludeCmd = vscode.commands.registerCommand(
     'smartReferences.setTextSearchInclude',
+    async () => {
+      await setTextSearchInclude();
+    },
+  );
+  const setTextSearchIncludeActiveCmd = vscode.commands.registerCommand(
+    'smartReferences.setTextSearchIncludeActive',
     async () => {
       await setTextSearchInclude();
     },
@@ -1103,6 +1327,12 @@ export function activate(context: vscode.ExtensionContext): void {
       await setTextSearchExclude();
     },
   );
+  const setTextSearchExcludeActiveCmd = vscode.commands.registerCommand(
+    'smartReferences.setTextSearchExcludeActive',
+    async () => {
+      await setTextSearchExclude();
+    },
+  );
 
   const toggleTextSearchFuzzyCmd = vscode.commands.registerCommand(
     'smartReferences.toggleTextSearchFuzzy',
@@ -1110,18 +1340,10 @@ export function activate(context: vscode.ExtensionContext): void {
       await toggleTextSearchFuzzy();
     },
   );
-
-  const setTextSearchBeforeContextCmd = vscode.commands.registerCommand(
-    'smartReferences.setTextSearchBeforeContext',
+  const toggleTextSearchFuzzyActiveCmd = vscode.commands.registerCommand(
+    'smartReferences.toggleTextSearchFuzzyActive',
     async () => {
-      await setTextSearchBeforeContext();
-    },
-  );
-
-  const setTextSearchAfterContextCmd = vscode.commands.registerCommand(
-    'smartReferences.setTextSearchAfterContext',
-    async () => {
-      await setTextSearchAfterContext();
+      await toggleTextSearchFuzzy();
     },
   );
 
@@ -1136,7 +1358,7 @@ export function activate(context: vscode.ExtensionContext): void {
     async () => {
       const targets = textSearchProvider.getOrderedReplaceTargets();
       if (targets.length === 0) {
-        vscode.window.showInformationMessage('当前没有可替换的搜索结果。');
+        vscode.window.showInformationMessage(t('当前没有可替换的搜索结果。', 'There are no replaceable search results right now.'));
         return;
       }
       const baseRequest = textSearchProvider.getEditableRequest();
@@ -1144,12 +1366,12 @@ export function activate(context: vscode.ExtensionContext): void {
       if (replaceText === undefined) return;
       const request = { ...baseRequest, replaceText };
       const fileCount = new Set(targets.map(target => target.uri)).size;
-      const answer = await vscode.window.showWarningMessage(
-        `按当前显示顺序替换 ${targets.length} 处命中，涉及 ${fileCount} 个文件？`,
-        { modal: true, detail: '替换会逐条执行，遇到第一处失败立即停止。' },
-        '全部替换',
+      const confirmed = await confirmTextSearchReplace(
+        replaceText,
+        t(`${targets.length} 处命中（${fileCount} 个文件）`, `${targets.length} matches (${fileCount} files)`),
+        t('全部替换', 'Replace All'),
       );
-      if (answer !== '全部替换') return;
+      if (!confirmed) return;
       await executeTextSearchReplace(request, targets, 'all');
     },
   );
@@ -1159,19 +1381,25 @@ export function activate(context: vscode.ExtensionContext): void {
       const uri = item?.match?.uri?.toString?.() ?? item?.match?.uri?.toString?.call?.(item.match.uri);
       const range = item?.match?.range;
       if (!uri || !range) {
-        vscode.window.showInformationMessage('请选择一条搜索命中再执行替换。');
+        vscode.window.showInformationMessage(t('请选择一条搜索命中再执行替换。', 'Select a search match before replacing.'));
         return;
       }
       const key = `${uri}#${range.start.line}:${range.start.character}-${range.end.line}:${range.end.character}`;
       const targets = textSearchProvider.getOrderedReplaceTargets({ targetKey: key });
       if (targets.length === 0) {
-        vscode.window.showInformationMessage('当前命中已失效，请先刷新搜索结果。');
+        vscode.window.showInformationMessage(t('当前命中已失效，请先刷新搜索结果。', 'The current match is stale. Refresh the search results first.'));
         return;
       }
       const baseRequest = textSearchProvider.getEditableRequest();
       const replaceText = await promptReplaceText(textSearchDraftRequest.replaceText || baseRequest.replaceText);
       if (replaceText === undefined) return;
       const request = { ...baseRequest, replaceText };
+      const confirmed = await confirmTextSearchReplace(
+        replaceText,
+        `${targets[0]?.relativePath ?? t('当前命中', 'Current Match')}:${targets[0]?.lineNumber ?? ''}`,
+        t('替换当前命中', 'Replace Current Match'),
+      );
+      if (!confirmed) return;
       await executeTextSearchReplace(request, targets, 'single');
     },
   );
@@ -1179,14 +1407,14 @@ export function activate(context: vscode.ExtensionContext): void {
     'smartReferences.replaceTextSearchSection',
     async (item?: any) => {
       const sectionKey = item?.bucket?.key;
-      const sectionLabel = item?.bucket?.label ?? '当前分组';
+      const sectionLabel = item?.bucket?.label ?? t('当前分组', 'Current Group');
       if (!sectionKey) {
-        vscode.window.showInformationMessage('请选择一个搜索分组再执行替换。');
+        vscode.window.showInformationMessage(t('请选择一个搜索分组再执行替换。', 'Select a search group before replacing.'));
         return;
       }
       const targets = textSearchProvider.getOrderedReplaceTargets({ sectionKey });
       if (targets.length === 0) {
-        vscode.window.showInformationMessage('当前分组没有可替换的搜索结果。');
+        vscode.window.showInformationMessage(t('当前分组没有可替换的搜索结果。', 'There are no replaceable search results in the current group.'));
         return;
       }
       const baseRequest = textSearchProvider.getEditableRequest();
@@ -1194,12 +1422,12 @@ export function activate(context: vscode.ExtensionContext): void {
       if (replaceText === undefined) return;
       const request = { ...baseRequest, replaceText };
       const fileCount = new Set(targets.map(target => target.uri)).size;
-      const answer = await vscode.window.showWarningMessage(
-        `按当前显示顺序替换分组“${sectionLabel}”中的 ${targets.length} 处命中，涉及 ${fileCount} 个文件？`,
-        { modal: true, detail: '替换会逐条执行，遇到第一处失败立即停止。' },
-        '替换当前分组',
+      const confirmed = await confirmTextSearchReplace(
+        replaceText,
+        t(`分组“${sectionLabel}”中的 ${targets.length} 处命中（${fileCount} 个文件）`, `${targets.length} matches in group "${sectionLabel}" (${fileCount} files)`),
+        t('替换当前分组', 'Replace Current Group'),
       );
-      if (answer !== '替换当前分组') return;
+      if (!confirmed) return;
       await executeTextSearchReplace(request, targets, 'all');
     },
   );
@@ -1207,26 +1435,26 @@ export function activate(context: vscode.ExtensionContext): void {
     'smartReferences.replaceTextSearchFile',
     async (item?: any) => {
       const fileUri = item?.bucket?.uri?.toString?.() ?? item?.bucket?.uri?.toString?.call?.(item.bucket.uri);
-      const relativePath = item?.bucket?.relativePath ?? '当前文件';
+      const relativePath = item?.bucket?.relativePath ?? t('当前文件', 'Current File');
       if (!fileUri) {
-        vscode.window.showInformationMessage('请选择一个搜索文件节点再执行替换。');
+        vscode.window.showInformationMessage(t('请选择一个搜索文件节点再执行替换。', 'Select a search file before replacing.'));
         return;
       }
       const targets = textSearchProvider.getOrderedReplaceTargets({ fileUri });
       if (targets.length === 0) {
-        vscode.window.showInformationMessage('当前文件没有可替换的搜索结果。');
+        vscode.window.showInformationMessage(t('当前文件没有可替换的搜索结果。', 'There are no replaceable search results in the current file.'));
         return;
       }
       const baseRequest = textSearchProvider.getEditableRequest();
       const replaceText = await promptReplaceText(textSearchDraftRequest.replaceText || baseRequest.replaceText);
       if (replaceText === undefined) return;
       const request = { ...baseRequest, replaceText };
-      const answer = await vscode.window.showWarningMessage(
-        `按当前显示顺序替换文件“${relativePath}”中的 ${targets.length} 处命中？`,
-        { modal: true, detail: '替换会逐条执行，遇到第一处失败立即停止。' },
-        '替换当前文件',
+      const confirmed = await confirmTextSearchReplace(
+        replaceText,
+        t(`文件“${relativePath}”中的 ${targets.length} 处命中`, `${targets.length} matches in file "${relativePath}"`),
+        t('替换当前文件', 'Replace Current File'),
       );
-      if (answer !== '替换当前文件') return;
+      if (!confirmed) return;
       await executeTextSearchReplace(request, targets, 'all');
     },
   );
@@ -1601,15 +1829,20 @@ export function activate(context: vscode.ExtensionContext): void {
     refreshTextSearchCmd,
     configureTextSearchCmd,
     toggleTextSearchMatchCaseCmd,
+    toggleTextSearchMatchCaseActiveCmd,
     toggleTextSearchWholeWordCmd,
+    toggleTextSearchWholeWordActiveCmd,
     toggleTextSearchRegexCmd,
+    toggleTextSearchRegexActiveCmd,
     setTextSearchIncludeCmd,
+    setTextSearchIncludeActiveCmd,
     setTextSearchExcludeCmd,
+    setTextSearchExcludeActiveCmd,
     toggleTextSearchFuzzyCmd,
-    setTextSearchBeforeContextCmd,
-    setTextSearchAfterContextCmd,
+    toggleTextSearchFuzzyActiveCmd,
     setTextSearchGroupingCmd,
     replaceAllTextSearchResultsCmd,
+    undoLastTextSearchReplaceCmd,
     replaceTextSearchMatchCmd,
     replaceTextSearchSectionCmd,
     replaceTextSearchFileCmd,

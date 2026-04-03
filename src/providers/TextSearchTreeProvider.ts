@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { spawn } from 'child_process';
 import { isStructuredTextLanguage } from '../core/StructuredTextParser';
+import { t } from '../i18n';
 
 export type SearchNode = SectionNode | WorkspaceNode | FileNode | MatchNode | ContextLineNode;
 type TextSearchContentKind = 'code' | 'comment';
@@ -235,7 +236,7 @@ class MatchNode extends vscode.TreeItem {
     this.iconPath = new vscode.ThemeIcon(match.contentKind === 'comment' ? 'comment' : 'search');
     this.command = {
       command: 'smartReferences.previewReference',
-      title: 'Preview Search Match',
+      title: t('预览搜索命中', 'Preview Search Match'),
       arguments: [match.uri, match.range],
     };
     this.contextValue = 'textSearchMatch';
@@ -243,25 +244,29 @@ class MatchNode extends vscode.TreeItem {
 }
 
 class ContextLineNode extends vscode.TreeItem {
-  constructor(public readonly match: TextSearchMatch, public readonly line: TextSearchContextLine, role: 'before' | 'after') {
-    super({ label: line.text || '(blank line)' }, vscode.TreeItemCollapsibleState.None);
+  constructor(public readonly match: TextSearchMatch, public readonly line: TextSearchContextLine, role: 'before' | 'current' | 'after') {
+    super(role === 'current' ? buildMatchTreeItemLabel(match) : { label: line.text || t('(空行)', '(blank line)') }, vscode.TreeItemCollapsibleState.None);
     this.description = `${line.lineNumber}`;
     this.resourceUri = match.uri;
-    this.iconPath = new vscode.ThemeIcon(role === 'before' ? 'arrow-up' : 'arrow-down');
+    this.iconPath = new vscode.ThemeIcon(
+      role === 'before' ? 'arrow-up' : role === 'after' ? 'arrow-down' : 'search',
+    );
     this.command = {
       command: 'smartReferences.previewReference',
-      title: 'Preview Search Context',
+      title: role === 'current' ? t('预览搜索命中', 'Preview Search Match') : t('预览搜索上下文', 'Preview Search Context'),
       arguments: [
         match.uri,
-        new vscode.Range(line.lineNumber - 1, 0, line.lineNumber - 1, Math.max(line.text.length, 1)),
+        role === 'current'
+          ? match.range
+          : new vscode.Range(line.lineNumber - 1, 0, line.lineNumber - 1, Math.max(line.text.length, 1)),
       ],
     };
-    this.contextValue = 'textSearchContext';
+    this.contextValue = role === 'current' ? 'textSearchContextCurrent' : 'textSearchContext';
   }
 }
 
 function buildMatchTreeItemLabel(match: TextSearchMatch): vscode.TreeItemLabel {
-  const label = match.lineText || '(blank line)';
+  const label = match.lineText || t('(空行)', '(blank line)');
   const start = clamp(match.range.start.character, 0, label.length);
   const end = clamp(match.range.end.character, start, label.length);
   return {
@@ -874,22 +879,22 @@ function buildContext(lines: string[], lineNumber: number, beforeCount: number, 
 
 function buildSectionLabel(match: TextSearchMatch, options: TextSearchOptions): string {
   const parts: string[] = [];
-  if (options.groupCodeAndComments) parts.push(match.contentKind === 'comment' ? '注释' : '代码');
-  if (options.groupConfigAndCodeFiles) parts.push(match.fileKind === 'config' ? '配置文件' : '代码文件');
-  return parts.join(' · ') || '全部';
+  if (options.groupCodeAndComments) parts.push(match.contentKind === 'comment' ? t('注释', 'Comments') : t('代码', 'Code'));
+  if (options.groupConfigAndCodeFiles) parts.push(match.fileKind === 'config' ? t('配置文件', 'Config Files') : t('代码文件', 'Code Files'));
+  return parts.join(' · ') || t('全部', 'All');
 }
 
 function getSectionSortOrder(label: string): number {
   switch (label) {
-    case '代码 · 代码文件': return 0;
-    case '注释 · 代码文件': return 1;
-    case '代码 · 配置文件': return 2;
-    case '注释 · 配置文件': return 3;
-    case '代码': return 0;
-    case '注释': return 1;
-    case '代码文件': return 0;
-    case '配置文件': return 1;
-    case '全部': return 0;
+    case t('代码 · 代码文件', 'Code · Code Files'): return 0;
+    case t('注释 · 代码文件', 'Comments · Code Files'): return 1;
+    case t('代码 · 配置文件', 'Code · Config Files'): return 2;
+    case t('注释 · 配置文件', 'Comments · Config Files'): return 3;
+    case t('代码', 'Code'): return 0;
+    case t('注释', 'Comments'): return 1;
+    case t('代码文件', 'Code Files'): return 0;
+    case t('配置文件', 'Config Files'): return 1;
+    case t('全部', 'All'): return 0;
     default: return 99;
   }
 }
@@ -1210,6 +1215,11 @@ export class TextSearchTreeProvider implements vscode.TreeDataProvider<SearchNod
     if (element instanceof MatchNode) {
       return [
         ...element.match.beforeLines.map(line => new ContextLineNode(element.match, line, 'before')),
+        new ContextLineNode(
+          element.match,
+          { lineNumber: element.match.lineNumber, text: element.match.lineText },
+          'current',
+        ),
         ...element.match.afterLines.map(line => new ContextLineNode(element.match, line, 'after')),
       ];
     }
