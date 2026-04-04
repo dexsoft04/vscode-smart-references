@@ -184,6 +184,11 @@
         "icon": "$(search)"
       },
       {
+        "command": "smartReferences.editTextSearch",
+        "title": "%command.editTextSearch.title%",
+        "icon": "$(edit)"
+      },
+      {
         "command": "smartReferences.searchTextFromSelection",
         "title": "%command.searchTextFromSelection.title%",
         "icon": "$(search)"
@@ -543,7 +548,7 @@
           "group": "navigation"
         },
         {
-          "command": "smartReferences.searchText",
+          "command": "smartReferences.editTextSearch",
           "when": "view == textSearchTree",
           "group": "navigation@1"
         },
@@ -560,7 +565,7 @@
         {
           "command": "smartReferences.undoLastTextSearchReplace",
           "when": "view == textSearchTree && smartReferences.canUndoTextSearchReplace",
-          "group": "navigation@1.5"
+          "group": "navigation@2.5"
         }
       ]
     },

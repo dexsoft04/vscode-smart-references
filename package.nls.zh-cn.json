@@ -6,6 +6,7 @@
   "command.changeProjectViewMode.title": "更改项目文件分组",
   "command.searchText.title": "搜索增强",
   "command.searchTextFromSelection.title": "用搜索增强查找",
+  "command.editTextSearch.title": "编辑搜索条件",
   "command.refreshTextSearch.title": "刷新搜索增强",
   "command.setTextSearchGrouping.title": "切换搜索增强分组",
   "command.configureTextSearch.title": "配置搜索增强",

@@ -6,6 +6,7 @@
   "command.changeProjectViewMode.title": "Change Project File Grouping",
   "command.searchText.title": "Enhanced Search",
   "command.searchTextFromSelection.title": "Search with Enhanced Search",
+  "command.editTextSearch.title": "Edit Search Conditions",
   "command.refreshTextSearch.title": "Refresh Enhanced Search",
   "command.setTextSearchGrouping.title": "Change Enhanced Search Grouping",
   "command.configureTextSearch.title": "Configure Enhanced Search",
