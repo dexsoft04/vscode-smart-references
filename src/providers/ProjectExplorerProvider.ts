@@ -267,6 +267,7 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
   private hasTest = false;
   private cppProjectDetected = false;
   private viewMode: ProjectViewMode = 'merged';
+  private fileHitCounts: Map<string, number> = new Map();
   private workspaceRoot: string;
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
   private refreshPromise: Promise<void> | null = null;
@@ -292,6 +293,13 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
 
   getStatusMessage(): string | undefined {
     return this.lastRefreshMessage;
+  }
+
+  updateHitCounts(counts: Map<string, number>): void {
+    this.fileHitCounts = counts;
+    if (this.viewMode === 'hotspot') {
+      this._onDidChangeTreeData.fire();
+    }
   }
 
   setViewMode(mode: ProjectViewMode): void {
@@ -478,6 +486,21 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
 
   async getChildren(element?: ProjectNode): Promise<ProjectNode[]> {
     if (!element) {
+      if (this.viewMode === 'hotspot') {
+        if (this.fileHitCounts.size === 0) return [];
+        const scored: { rel: string; count: number }[] = [];
+        for (const [fsPath, count] of this.fileHitCounts) {
+          const rel = this.toRelativePath(vscode.Uri.file(fsPath));
+          if (rel) scored.push({ rel, count });
+        }
+        scored.sort((a, b) => b.count - a.count || a.rel.localeCompare(b.rel));
+        return scored.map(({ rel, count }) => {
+          const node = new ProjFileNode(rel, this.workspaceRoot, false);
+          node.description = `${count} hits`;
+          return node;
+        });
+      }
+
       if (this.viewMode === 'merged') {
         const nodes = this.getFromIndex(this.allIndex, '', 'all');
         if (this.ignoredEntries.length > 0) {

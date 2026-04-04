@@ -1,6 +1,11 @@
 {
   "viewContainer.smartReferences.title": "智能引用",
+  "command.findReferences.title": "查找智能引用",
+  "command.showTypeHierarchy.title": "查找实现",
+  "command.showStructure.title": "显示文件结构",
+  "command.changeProjectViewMode.title": "更改项目文件分组",
   "command.searchText.title": "搜索增强",
+  "command.searchTextFromSelection.title": "用搜索增强查找",
   "command.refreshTextSearch.title": "刷新搜索增强",
   "command.setTextSearchGrouping.title": "切换搜索增强分组",
   "command.configureTextSearch.title": "配置搜索增强",
@@ -21,8 +26,11 @@
   "config.textSearch.includeGlobs.description": "搜索增强额外包含的 glob 规则；为空时不额外限制。",
   "config.textSearch.excludeGlobs.description": "搜索增强额外排除的 glob 规则，会叠加在 VS Code 的 search.exclude 和 files.exclude 之上。",
   "config.textSearch.fuzzySearch.description": "是否为搜索增强启用模糊子序列匹配；默认关闭。",
+  "config.textSearch.historySize.description": "搜索增强保留多少条最近搜索历史；搜索输入框可用上下方向键或鼠标滚轮切换这些历史记录。",
   "config.textSearch.groupCodeAndComments.description": "是否把搜索增强结果按代码命中和注释命中分组。",
   "config.textSearch.groupConfigAndCodeFiles.description": "是否把搜索增强结果按配置文件和代码文件分组。",
   "config.textSearch.maxFuzzyFileScan.description": "搜索增强在模糊搜索模式下最多扫描多少个文件。",
-  "config.textSearch.maxFuzzyMatches.description": "搜索增强在模糊搜索模式下最多收集多少条命中。"
+  "config.textSearch.maxFuzzyMatches.description": "搜索增强在模糊搜索模式下最多收集多少条命中。",
+  "viewContainer.projectPanel.title": "项目文件",
+  "view.projectExplorer.name": "项目文件"
 }

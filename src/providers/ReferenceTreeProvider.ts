@@ -1,10 +1,29 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { ClassifiedReference, ReferenceCategory, CodeContext, locationKey } from '../core/ReferenceTypes';
+
+// Serialized form of a pin for workspaceState persistence
+export interface SerializedPinRef {
+  uri: string;
+  sl: number; sc: number; el: number; ec: number;
+  cat: number; ctx: number;
+  line: string;
+  sym?: string;
+}
+export interface SerializedPin {
+  id: string;
+  symbolName: string;
+  refs: SerializedPinRef[];
+  scopeFilter: ReferenceScopeFilter;
+  groupingMode: ReferenceGroupingMode;
+  pinnedAt: number;
+  anchorUri?: string;
+  note?: string;
+}
 import { makeCategoryUri } from './CategoryDecorationProvider';
 import { extractDocComment } from './StructureTreeProvider';
 
-type TreeNode = CategoryGroupNode | DirectoryNode | FileNode | CallerNode | ReferenceItem;
+type TreeNode = SummaryNode | CategoryGroupNode | DirectoryNode | FileNode | CallerNode | ReferenceItem;
 export type ReferenceScopeFilter =
   | 'all'
   | 'production'
@@ -59,6 +78,23 @@ function buildCategoryGroups(refs: ClassifiedReference[]): CategoryGroup[] {
     }
   }
   return groups;
+}
+
+// ── Summary node ─────────────────────────────────────────────────────────────
+
+class SummaryNode extends vscode.TreeItem {
+  constructor(refs: ClassifiedReference[], keywordFilter: string) {
+    const fileCount = new Set(refs.map(r => r.location.uri.toString())).size;
+    const dirCount = new Set(refs.map(r => path.dirname(r.location.uri.fsPath))).size;
+    const testCount = refs.filter(r => r.context === CodeContext.Test).length;
+    const parts = [`${refs.length} refs`, `${fileCount} ${fileCount !== 1 ? 'files' : 'file'}`];
+    if (dirCount > 1) parts.push(`${dirCount} dirs`);
+    if (testCount > 0) parts.push(`${testCount} in tests`);
+    super(parts.join(' · '), vscode.TreeItemCollapsibleState.None);
+    if (keywordFilter) this.description = `filter: "${keywordFilter}"`;
+    this.iconPath = new vscode.ThemeIcon('info');
+    this.contextValue = 'summaryNode';
+  }
 }
 
 // ── Tree node classes ─────────────────────────────────────────────────────────
@@ -184,6 +220,7 @@ export interface PinnedReferenceResult {
   groupingMode: ReferenceGroupingMode;
   pinnedAt: number;
   anchorUri?: vscode.Uri;
+  note?: string;
 }
 
 export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>, vscode.Disposable {
@@ -202,6 +239,10 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
   private history: HistoryEntry[] = [];
   private historyIndex = -1;
   private pinnedResults: PinnedReferenceResult[] = [];
+  private keywordFilter: string = '';
+  private fileHitCountsCache: Map<string, number> | undefined;
+  private readonly _onPinnedResultsChanged = new vscode.EventEmitter<void>();
+  readonly onPinnedResultsChanged: vscode.Event<void> = this._onPinnedResultsChanged.event;
 
   constructor() {
     this.workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -217,6 +258,7 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
     this.history.push({ symbolName, refs, anchorUri: this.scopeAnchorUri });
     if (this.history.length > MAX_HISTORY) this.history.shift();
     this.historyIndex = this.history.length - 1;
+    this.fileHitCountsCache = undefined;
     this._onDidChangeTreeData.fire();
   }
 
@@ -270,6 +312,18 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
     return this.scopeFilter;
   }
 
+  setKeywordFilter(keyword: string): void {
+    const normalized = keyword.toLowerCase().trim();
+    if (this.keywordFilter === normalized) return;
+    this.keywordFilter = normalized;
+    this.applyFilter();
+    this._onDidChangeTreeData.fire();
+  }
+
+  getKeywordFilter(): string {
+    return this.keywordFilter;
+  }
+
   setGroupingMode(mode: ReferenceGroupingMode): void {
     if (this.groupingMode === mode) return;
     this.groupingMode = mode;
@@ -306,6 +360,7 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
     if (this.pinnedResults.length > MAX_PINNED) {
       this.pinnedResults.length = MAX_PINNED;
     }
+    this._onPinnedResultsChanged.fire();
     return { entry, isNew: true };
   }
 
@@ -326,12 +381,72 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
   removePinnedResult(id: string): boolean {
     const before = this.pinnedResults.length;
     this.pinnedResults = this.pinnedResults.filter(entry => entry.id !== id);
-    return this.pinnedResults.length !== before;
+    const changed = this.pinnedResults.length !== before;
+    if (changed) this._onPinnedResultsChanged.fire();
+    return changed;
+  }
+
+  setPinnedNote(id: string, note: string): void {
+    const pin = this.pinnedResults.find(p => p.id === id);
+    if (!pin) return;
+    pin.note = note.trim() || undefined;
+    this._onPinnedResultsChanged.fire();
+  }
+
+  loadPins(pins: PinnedReferenceResult[]): void {
+    this.pinnedResults = pins;
+    this.sortPinnedResults();
+  }
+
+  serializePins(): SerializedPin[] {
+    return this.pinnedResults.map(pin => ({
+      id: pin.id,
+      symbolName: pin.symbolName,
+      refs: pin.refs.map(r => ({
+        uri: r.location.uri.toString(),
+        sl: r.location.range.start.line,
+        sc: r.location.range.start.character,
+        el: r.location.range.end.line,
+        ec: r.location.range.end.character,
+        cat: r.category as unknown as number,
+        ctx: r.context as unknown as number,
+        line: r.lineText,
+        sym: r.containingSymbol,
+      })),
+      scopeFilter: pin.scopeFilter,
+      groupingMode: pin.groupingMode,
+      pinnedAt: pin.pinnedAt,
+      anchorUri: pin.anchorUri?.toString(),
+      note: pin.note,
+    }));
+  }
+
+  static deserializePins(data: SerializedPin[]): PinnedReferenceResult[] {
+    return data.map(pin => ({
+      id: pin.id,
+      symbolName: pin.symbolName,
+      refs: pin.refs.map(r => ({
+        location: new vscode.Location(
+          vscode.Uri.parse(r.uri),
+          new vscode.Range(r.sl, r.sc, r.el, r.ec),
+        ),
+        category: r.cat as unknown as ReferenceCategory,
+        context: r.ctx as unknown as CodeContext,
+        lineText: r.line,
+        containingSymbol: r.sym,
+      })),
+      scopeFilter: pin.scopeFilter as ReferenceScopeFilter,
+      groupingMode: pin.groupingMode as ReferenceGroupingMode,
+      pinnedAt: pin.pinnedAt,
+      anchorUri: pin.anchorUri ? vscode.Uri.parse(pin.anchorUri) : undefined,
+      note: pin.note,
+    }));
   }
 
   getTreeItem(element: TreeNode): vscode.TreeItem { return element; }
 
   getParent(element: TreeNode): TreeNode | undefined {
+    if (element instanceof SummaryNode) return undefined;
     if (element instanceof CategoryGroupNode) return undefined;
 
     if (element instanceof DirectoryNode) {
@@ -366,7 +481,11 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
 
   getChildren(element?: TreeNode): TreeNode[] | Thenable<TreeNode[]> {
     if (!element) {
-      return buildCategoryGroups(this.refs).map(g => new CategoryGroupNode(g));
+      const groups = buildCategoryGroups(this.refs).map(g => new CategoryGroupNode(g));
+      if (this.refs.length > 0) {
+        return [new SummaryNode(this.refs, this.keywordFilter), ...groups];
+      }
+      return groups;
     }
     if (element instanceof CategoryGroupNode) {
       return this.groupingMode === 'directory'
@@ -527,6 +646,45 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
       );
   }
 
+  getFileHitCounts(): Map<string, number> {
+    if (this.fileHitCountsCache) return this.fileHitCountsCache;
+    const counts = new Map<string, number>();
+    for (const entry of this.history) {
+      for (const ref of entry.refs) {
+        const fsPath = ref.location.uri.fsPath;
+        counts.set(fsPath, (counts.get(fsPath) ?? 0) + 1);
+      }
+    }
+    this.fileHitCountsCache = counts;
+    return counts;
+  }
+
+  formatAsMarkdown(): string {
+    if (!this.symbolName || this.refs.length === 0) return '';
+    const lines: string[] = [`# References: \`${this.symbolName}\`\n`];
+    const groups = buildCategoryGroups(this.refs);
+    for (const g of groups) {
+      lines.push(`## ${g.label}`);
+      const byFile = new Map<string, ClassifiedReference[]>();
+      for (const ref of g.refs) {
+        const key = ref.location.uri.fsPath;
+        if (!byFile.has(key)) byFile.set(key, []);
+        byFile.get(key)!.push(ref);
+      }
+      for (const [file, fileRefs] of byFile) {
+        const relPath = vscode.workspace.asRelativePath(file);
+        lines.push(`\n### ${relPath}`);
+        for (const ref of fileRefs) {
+          const line = ref.location.range.start.line + 1;
+          const symbol = ref.containingSymbol ? ` (in \`${ref.containingSymbol}\`)` : '';
+          lines.push(`- L${line}${symbol}: \`${ref.lineText.trim()}\``);
+        }
+      }
+      lines.push('');
+    }
+    return lines.join('\n');
+  }
+
   getSymbolLabel(): string {
     if (!this.symbolName) return '';
     const suffix = this.scopeFilterLabel();
@@ -534,21 +692,29 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
   }
 
   private applyFilter(): void {
+    const keyword = this.keywordFilter;
     this.refs = this.allRefs.filter(ref => {
-      if (this.scopeFilter === 'all') return true;
-      if (this.scopeFilter === 'production') return ref.context === CodeContext.Production;
-      if (this.scopeFilter === 'test') return ref.context === CodeContext.Test;
-
-      if (this.scopeFilter === 'currentFile') {
-        return !!this.scopeAnchorUri && ref.location.uri.toString() === this.scopeAnchorUri.toString();
+      switch (this.scopeFilter) {
+        case 'production':
+          if (ref.context !== CodeContext.Production) return false;
+          break;
+        case 'test':
+          if (ref.context !== CodeContext.Test) return false;
+          break;
+        case 'currentFile':
+          if (!this.scopeAnchorUri || ref.location.uri.toString() !== this.scopeAnchorUri.toString()) return false;
+          break;
+        case 'currentDirectory':
+          if (!this.scopeAnchorUri || path.dirname(ref.location.uri.fsPath) !== path.dirname(this.scopeAnchorUri.fsPath)) return false;
+          break;
+        case 'workspaceSource':
+          if (!this.isWorkspaceSourceUri(ref.location.uri)) return false;
+          break;
       }
-
-      if (this.scopeFilter === 'currentDirectory') {
-        if (!this.scopeAnchorUri) return false;
-        return path.dirname(ref.location.uri.fsPath) === path.dirname(this.scopeAnchorUri.fsPath);
+      if (keyword && !ref.lineText.toLowerCase().includes(keyword) && !ref.containingSymbol?.toLowerCase().includes(keyword)) {
+        return false;
       }
-
-      return this.isWorkspaceSourceUri(ref.location.uri);
+      return true;
     });
     this.expandSubLevels = this.refs.length <= AUTO_EXPAND_THRESHOLD;
   }
@@ -589,6 +755,7 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
 
   dispose(): void {
     this._onDidChangeTreeData.dispose();
+    this._onPinnedResultsChanged.dispose();
   }
 }
 

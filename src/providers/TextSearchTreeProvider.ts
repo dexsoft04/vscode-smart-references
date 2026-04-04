@@ -7,7 +7,7 @@ import { t } from '../i18n';
 
 export type SearchNode = SectionNode | WorkspaceNode | FileNode | MatchNode | ContextLineNode;
 type TextSearchContentKind = 'code' | 'comment';
-type TextSearchFileKind = 'code' | 'config';
+type TextSearchFileKind = 'code' | 'config' | 'other';
 type ExcludeConfigValue = boolean | { when?: string };
 type CommentSyntax = 'slash' | 'hash' | 'dashdash' | 'xml' | 'semicolon';
 
@@ -195,6 +195,14 @@ const CONFIG_BASENAMES = new Set([
 const CONFIG_EXTENSIONS = new Set([
   '.json', '.jsonc', '.yaml', '.yml', '.toml', '.ini', '.properties', '.env', '.conf', '.config',
   '.xml', '.editorconfig', '.gitignore', '.gitattributes', '.lock',
+]);
+
+const OTHER_TEXT_EXTENSIONS = new Set([
+  '.md', '.mdx', '.txt', '.rst', '.adoc', '.asciidoc',
+]);
+
+const OTHER_TEXT_LANGUAGE_IDS = new Set([
+  'markdown', 'plaintext',
 ]);
 
 class SectionNode extends vscode.TreeItem {
@@ -727,6 +735,7 @@ function detectFileKind(document: vscode.TextDocument): TextSearchFileKind {
   if (CONFIG_BASENAMES.has(base)) return 'config';
   const ext = path.extname(base);
   if (CONFIG_EXTENSIONS.has(ext)) return 'config';
+  if (OTHER_TEXT_EXTENSIONS.has(ext) || OTHER_TEXT_LANGUAGE_IDS.has(document.languageId)) return 'other';
   if (isStructuredTextLanguage(document.languageId) && !['markdown', 'html', 'xml'].includes(document.languageId)) {
     return 'config';
   }
@@ -880,7 +889,15 @@ function buildContext(lines: string[], lineNumber: number, beforeCount: number, 
 function buildSectionLabel(match: TextSearchMatch, options: TextSearchOptions): string {
   const parts: string[] = [];
   if (options.groupCodeAndComments) parts.push(match.contentKind === 'comment' ? t('注释', 'Comments') : t('代码', 'Code'));
-  if (options.groupConfigAndCodeFiles) parts.push(match.fileKind === 'config' ? t('配置文件', 'Config Files') : t('代码文件', 'Code Files'));
+  if (options.groupConfigAndCodeFiles) {
+    parts.push(
+      match.fileKind === 'config'
+        ? t('配置文件', 'Config Files')
+        : match.fileKind === 'other'
+          ? t('其他文件', 'Other Files')
+          : t('代码文件', 'Code Files'),
+    );
+  }
   return parts.join(' · ') || t('全部', 'All');
 }
 
@@ -890,10 +907,13 @@ function getSectionSortOrder(label: string): number {
     case t('注释 · 代码文件', 'Comments · Code Files'): return 1;
     case t('代码 · 配置文件', 'Code · Config Files'): return 2;
     case t('注释 · 配置文件', 'Comments · Config Files'): return 3;
+    case t('代码 · 其他文件', 'Code · Other Files'): return 4;
+    case t('注释 · 其他文件', 'Comments · Other Files'): return 5;
     case t('代码', 'Code'): return 0;
     case t('注释', 'Comments'): return 1;
     case t('代码文件', 'Code Files'): return 0;
     case t('配置文件', 'Config Files'): return 1;
+    case t('其他文件', 'Other Files'): return 2;
     case t('全部', 'All'): return 0;
     default: return 99;
   }

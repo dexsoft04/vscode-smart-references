@@ -6,7 +6,7 @@
   "version": "0.1.0",
   "publisher": "smart-references",
   "engines": {
-    "vscode": "^1.80.0"
+    "vscode": "^1.98.0"
   },
   "categories": [
     "Programming Languages",
@@ -20,11 +20,11 @@
     "commands": [
       {
         "command": "smartReferences.findReferences",
-        "title": "Find Smart References"
+        "title": "%command.findReferences.title%"
       },
       {
         "command": "smartReferences.showTypeHierarchy",
-        "title": "Find Implementations"
+        "title": "%command.showTypeHierarchy.title%"
       },
       {
         "command": "smartReferences.goToImplementation",
@@ -86,7 +86,7 @@
       },
       {
         "command": "smartReferences.showStructure",
-        "title": "Show File Structure"
+        "title": "%command.showStructure.title%"
       },
       {
         "command": "smartReferences.refreshStructure",
@@ -109,6 +109,16 @@
         "icon": "$(list-tree)"
       },
       {
+        "command": "smartReferences.exportResults",
+        "title": "Export Results to Clipboard",
+        "icon": "$(export)"
+      },
+      {
+        "command": "smartReferences.filterReferenceKeyword",
+        "title": "Filter by Keyword",
+        "icon": "$(search)"
+      },
+      {
         "command": "smartReferences.pinReferenceResults",
         "title": "Pin Reference Results",
         "icon": "$(pinned)"
@@ -120,7 +130,7 @@
       },
       {
         "command": "smartReferences.toggleProjectViewMode",
-        "title": "Toggle Categorized / Merged View",
+        "title": "%command.changeProjectViewMode.title%",
         "icon": "$(group-by-ref-type)"
       },
       {
@@ -174,19 +184,14 @@
         "icon": "$(search)"
       },
       {
+        "command": "smartReferences.searchTextFromSelection",
+        "title": "%command.searchTextFromSelection.title%",
+        "icon": "$(search)"
+      },
+      {
         "command": "smartReferences.refreshTextSearch",
         "title": "%command.refreshTextSearch.title%",
         "icon": "$(refresh)"
-      },
-      {
-        "command": "smartReferences.setTextSearchGrouping",
-        "title": "%command.setTextSearchGrouping.title%",
-        "icon": "$(list-tree)"
-      },
-      {
-        "command": "smartReferences.configureTextSearch",
-        "title": "%command.configureTextSearch.title%",
-        "icon": "$(settings-gear)"
       },
       {
         "command": "smartReferences.replaceAllTextSearchResults",
@@ -202,30 +207,6 @@
         "command": "smartReferences.replaceTextSearchMatch",
         "title": "%command.replaceTextSearchMatch.title%",
         "icon": "$(replace)"
-      },
-      {
-        "command": "smartReferences.toggleTextSearchMatchCaseActive",
-        "title": "%command.toggleTextSearchMatchCase.title%",
-        "icon": {
-          "light": "images/text-search/case-active-light.svg",
-          "dark": "images/text-search/case-active-dark.svg"
-        }
-      },
-      {
-        "command": "smartReferences.toggleTextSearchWholeWordActive",
-        "title": "%command.toggleTextSearchWholeWord.title%",
-        "icon": {
-          "light": "images/text-search/word-active-light.svg",
-          "dark": "images/text-search/word-active-dark.svg"
-        }
-      },
-      {
-        "command": "smartReferences.toggleTextSearchRegexActive",
-        "title": "%command.toggleTextSearchRegex.title%",
-        "icon": {
-          "light": "images/text-search/regex-active-light.svg",
-          "dark": "images/text-search/regex-active-dark.svg"
-        }
       },
       {
         "command": "smartReferences.toggleTextSearchMatchCase",
@@ -258,41 +239,14 @@
         "icon": "$(filter)"
       },
       {
-        "command": "smartReferences.setTextSearchIncludeActive",
-        "title": "%command.setTextSearchInclude.title%",
-        "icon": {
-          "light": "images/text-search/filter-active-light.svg",
-          "dark": "images/text-search/filter-active-dark.svg"
-        }
-      },
-      {
         "command": "smartReferences.setTextSearchExclude",
         "title": "%command.setTextSearchExclude.title%",
-        "icon": {
-          "light": "images/text-search/exclude-light.svg",
-          "dark": "images/text-search/exclude-dark.svg"
-        }
-      },
-      {
-        "command": "smartReferences.setTextSearchExcludeActive",
-        "title": "%command.setTextSearchExclude.title%",
-        "icon": {
-          "light": "images/text-search/exclude-active-light.svg",
-          "dark": "images/text-search/exclude-active-dark.svg"
-        }
+        "icon": "$(exclude)"
       },
       {
         "command": "smartReferences.toggleTextSearchFuzzy",
         "title": "%command.toggleTextSearchFuzzy.title%",
-        "icon": "$(symbol-string)"
-      },
-      {
-        "command": "smartReferences.toggleTextSearchFuzzyActive",
-        "title": "%command.toggleTextSearchFuzzy.title%",
-        "icon": {
-          "light": "images/text-search/fuzzy-active-light.svg",
-          "dark": "images/text-search/fuzzy-active-dark.svg"
-        }
+        "icon": "$(search-fuzzy)"
       }
     ],
     "keybindings": [
@@ -335,6 +289,16 @@
         "command": "smartReferences.searchText",
         "key": "ctrl+alt+u",
         "when": "editorTextFocus || !inputFocus"
+      },
+      {
+        "command": "smartReferences.previousTextSearchHistory",
+        "key": "up",
+        "when": "inQuickInput && smartReferences.textSearchInputActive"
+      },
+      {
+        "command": "smartReferences.nextTextSearchHistory",
+        "key": "down",
+        "when": "inQuickInput && smartReferences.textSearchInputActive"
       }
     ],
     "menus": {
@@ -381,6 +345,10 @@
         },
         {
           "command": "smartReferences.copyRelativePath",
+          "when": "false"
+        },
+        {
+          "command": "smartReferences.searchTextFromSelection",
           "when": "false"
         }
       ],
@@ -479,18 +447,23 @@
       "editor/context": [
         {
           "command": "smartReferences.findReferences",
-          "group": "navigation@8",
+          "group": "2_smartReferences@1",
           "when": "editorTextFocus"
         },
         {
           "command": "smartReferences.showTypeHierarchy",
-          "group": "navigation@9",
+          "group": "2_smartReferences@2",
           "when": "editorTextFocus"
         },
         {
           "command": "smartReferences.showStructure",
-          "group": "navigation@8",
+          "group": "2_smartReferences@3",
           "when": "editorTextFocus"
+        },
+        {
+          "command": "smartReferences.searchTextFromSelection",
+          "group": "2_smartReferences@4",
+          "when": "editorTextFocus && editorHasSelection"
         }
       ],
       "view/title": [
@@ -511,6 +484,16 @@
         },
         {
           "command": "smartReferences.setReferenceGrouping",
+          "when": "view == smartReferencesTree",
+          "group": "navigation"
+        },
+        {
+          "command": "smartReferences.exportResults",
+          "when": "view == smartReferencesTree",
+          "group": "navigation"
+        },
+        {
+          "command": "smartReferences.filterReferenceKeyword",
           "when": "view == smartReferencesTree",
           "group": "navigation"
         },
@@ -565,79 +548,14 @@
           "group": "navigation@1"
         },
         {
-          "command": "smartReferences.setTextSearchInclude",
-          "when": "view == textSearchTree && !smartReferences.textSearchIncludeSet",
-          "group": "navigation@2"
-        },
-        {
-          "command": "smartReferences.setTextSearchIncludeActive",
-          "when": "view == textSearchTree && smartReferences.textSearchIncludeSet",
-          "group": "navigation@2"
-        },
-        {
-          "command": "smartReferences.setTextSearchExclude",
-          "when": "view == textSearchTree && !smartReferences.textSearchExcludeSet",
-          "group": "navigation@3"
-        },
-        {
-          "command": "smartReferences.setTextSearchExcludeActive",
-          "when": "view == textSearchTree && smartReferences.textSearchExcludeSet",
-          "group": "navigation@3"
-        },
-        {
-          "command": "smartReferences.toggleTextSearchMatchCase",
-          "when": "view == textSearchTree && !smartReferences.textSearchMatchCase",
-          "group": "navigation@4"
-        },
-        {
-          "command": "smartReferences.toggleTextSearchMatchCaseActive",
-          "when": "view == textSearchTree && smartReferences.textSearchMatchCase",
-          "group": "navigation@4"
-        },
-        {
-          "command": "smartReferences.toggleTextSearchWholeWord",
-          "when": "view == textSearchTree && !smartReferences.textSearchWholeWord",
-          "group": "navigation@5"
-        },
-        {
-          "command": "smartReferences.toggleTextSearchWholeWordActive",
-          "when": "view == textSearchTree && smartReferences.textSearchWholeWord",
-          "group": "navigation@5"
-        },
-        {
-          "command": "smartReferences.toggleTextSearchRegex",
-          "when": "view == textSearchTree && !smartReferences.textSearchRegex",
-          "group": "navigation@6"
-        },
-        {
-          "command": "smartReferences.toggleTextSearchRegexActive",
-          "when": "view == textSearchTree && smartReferences.textSearchRegex",
-          "group": "navigation@6"
-        },
-        {
-          "command": "smartReferences.toggleTextSearchFuzzy",
-          "when": "view == textSearchTree && !smartReferences.textSearchFuzzy",
-          "group": "navigation@7"
-        },
-        {
-          "command": "smartReferences.toggleTextSearchFuzzyActive",
-          "when": "view == textSearchTree && smartReferences.textSearchFuzzy",
-          "group": "navigation@7"
-        },
-        {
-          "command": "smartReferences.setTextSearchGrouping",
-          "when": "view == textSearchTree",
-          "group": "navigation@8"
-        },
-        {
           "command": "smartReferences.refreshTextSearch",
           "when": "view == textSearchTree",
-          "group": "navigation@9"
+          "group": "navigation@2"
         },
         {
           "command": "smartReferences.replaceAllTextSearchResults",
           "when": "view == textSearchTree",
-          "group": "navigation@10"
+          "group": "navigation@3"
         },
         {
           "command": "smartReferences.undoLastTextSearchReplace",
@@ -658,6 +576,11 @@
         {
           "id": "smartReferencesSearchPanel",
           "title": "%viewContainer.searchPanel.title%",
+          "icon": "images/icon.svg"
+        },
+        {
+          "id": "smartReferencesProjectPanel",
+          "title": "%viewContainer.projectPanel.title%",
           "icon": "images/icon.svg"
         }
       ]
@@ -681,16 +604,16 @@
           "name": "Dependencies"
         }
       ],
-      "explorer": [
-        {
-          "id": "projectExplorer",
-          "name": "Project Files"
-        }
-      ],
       "smartReferencesSearchPanel": [
         {
           "id": "textSearchTree",
           "name": "%view.textSearchTree.name%"
+        }
+      ],
+      "smartReferencesProjectPanel": [
+        {
+          "id": "projectExplorer",
+          "name": "%view.projectExplorer.name%"
         }
       ]
     },
@@ -747,8 +670,29 @@
             "**/src/test/**",
             "**/*Test.java",
             "**/*Test.kt",
+            "**/*Tests.kt",
+            "**/*Spec.kt",
+            "**/src/test/**/*.kt",
+            "**/*_test.{c,cc,cpp,cxx,h,hh,hpp,hxx,m,mm}",
+            "**/*.{test,spec}.{c,cc,cpp,cxx,h,hh,hpp,hxx,m,mm}",
+            "**/*Test.{c,cc,cpp,cxx,h,hh,hpp,hxx,m,mm}",
+            "**/*Tests.{c,cc,cpp,cxx,h,hh,hpp,hxx,m,mm}",
+            "**/*_unittest.{c,cc,cpp,cxx,h,hh,hpp,hxx,m,mm}",
+            "**/*UnitTest.{c,cc,cpp,cxx,h,hh,hpp,hxx,m,mm}",
+            "**/test/**/*.{c,cc,cpp,cxx,h,hh,hpp,hxx,m,mm}",
+            "**/tests/**/*.{c,cc,cpp,cxx,h,hh,hpp,hxx,m,mm}",
+            "**/*Test.swift",
+            "**/*Tests.swift",
+            "**/*Spec.swift",
+            "**/Tests/**/*.swift",
+            "**/tests/**/*.swift",
+            "**/*_test.rs",
+            "**/*_tests.rs",
             "**/tests/**/*.rs",
+            "**/benches/**/*.rs",
+            "**/*Test.cs",
             "**/*Tests.cs",
+            "**/Tests/**/*.cs",
             "**/*.Tests/**"
           ],
           "description": "Glob patterns to identify test files"
@@ -871,6 +815,13 @@
           "default": false,
           "description": "%config.textSearch.fuzzySearch.description%"
         },
+        "smartReferences.textSearch.historySize": {
+          "type": "number",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "%config.textSearch.historySize.description%"
+        },
         "smartReferences.textSearch.groupCodeAndComments": {
           "type": "boolean",
           "default": true,
@@ -902,11 +853,13 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "test": "npm run compile && node tests/test-utils.js && node tests/test-dependencies.js && node tests/test-proto-symbols.js",
-    "package": "vsce package"
+    "package": "vsce package",
+    "test:vscode": "npm run compile && node tests/run-vscode-tests.js"
   },
   "devDependencies": {
-    "@types/vscode": "^1.80.0",
     "@types/node": "^18.0.0",
+    "@types/vscode": "^1.80.0",
+    "@vscode/test-electron": "^2.5.2",
     "typescript": "^5.3.0"
   }
 }

@@ -7,9 +7,19 @@ const DEFAULT_TEST_PATTERNS = [
   '**/__tests__/**',
   '**/test_*.py', '**/*_test.py', '**/tests/**/*.py',
   '**/src/test/**',
-  '**/*Test.java', '**/*Test.kt',
-  '**/tests/**/*.rs',
-  '**/*Tests.cs', '**/*.Tests/**',
+  '**/*Test.java',
+  '**/*Test.kt', '**/*Tests.kt', '**/*Spec.kt',
+  '**/*_test.{c,cc,cpp,cxx,h,hh,hpp,hxx,m,mm}',
+  '**/*.{test,spec}.{c,cc,cpp,cxx,h,hh,hpp,hxx,m,mm}',
+  '**/*Test.{c,cc,cpp,cxx,h,hh,hpp,hxx,m,mm}',
+  '**/*Tests.{c,cc,cpp,cxx,h,hh,hpp,hxx,m,mm}',
+  '**/*_unittest.{c,cc,cpp,cxx,h,hh,hpp,hxx,m,mm}',
+  '**/*UnitTest.{c,cc,cpp,cxx,h,hh,hpp,hxx,m,mm}',
+  '**/test/**/*.{c,cc,cpp,cxx,h,hh,hpp,hxx,m,mm}',
+  '**/tests/**/*.{c,cc,cpp,cxx,h,hh,hpp,hxx,m,mm}',
+  '**/*Test.swift', '**/*Tests.swift', '**/*Spec.swift', '**/Tests/**/*.swift', '**/tests/**/*.swift',
+  '**/*_test.rs', '**/*_tests.rs', '**/tests/**/*.rs', '**/benches/**/*.rs',
+  '**/*Test.cs', '**/*Tests.cs', '**/Tests/**/*.cs', '**/*.Tests/**',
 ];
 
 function globToRegex(pattern: string): RegExp {

@@ -1,5 +1,23 @@
 'use strict';
 
+const {
+  classifyCppProjectPath,
+  detectProjectRoots,
+  getAvailableProjectViewModes,
+  isGeneratedProjectPath,
+  looksLikeCppProject,
+  PROJECT_LAYOUT_RULES,
+  resolveProjectRoot,
+  resolveProjectViewMode,
+  shouldDimMergedTestFile,
+} = require('../out/providers/ProjectExplorerGrouping');
+const {
+  DEFAULT_TEXT_SEARCH_HISTORY_LIMIT,
+  normalizeTextSearchHistoryLimit,
+  pushTextSearchHistory,
+  sanitizeTextSearchHistory,
+} = require('../out/core/TextSearchHistory');
+
 // ── Inline the pure functions under test ──────────────────────────────────────
 
 function globToRegex(pattern) {
@@ -47,6 +65,18 @@ function assert(condition, label) {
     passed++;
   } else {
     console.error(`  ✗ ${label}`);
+    failed++;
+  }
+}
+
+function assertDeepEqual(actual, expected, label) {
+  try {
+    require('assert').deepStrictEqual(actual, expected);
+    console.log(`  ✓ ${label}`);
+    passed++;
+  } catch (e) {
+    console.error(`  ✗ ${label}`);
+    console.error(`    ${e.message}`);
     failed++;
   }
 }
@@ -108,6 +138,52 @@ group('globToRegex — src/test hierarchy (Maven)', () => {
   assert(!rx.test('/project/src/main/java/Foo.java'), 'rejects src/main');
 });
 
+group('globToRegex — C/C++ test files', () => {
+  const rxSuffix = globToRegex('**/*_test.{c,cc,cpp,cxx,h,hh,hpp,hxx,m,mm}');
+  assert(rxSuffix.test('/project/tests/login_server_test.cpp'), 'matches *_test.cpp');
+  assert(rxSuffix.test('/project/tests/login_server_test.mm'), 'matches *_test.mm');
+
+  const rxDir = globToRegex('**/tests/**/*.{c,cc,cpp,cxx,h,hh,hpp,hxx,m,mm}');
+  assert(rxDir.test('/project/tests/unit/login_server_spec.cc'), 'matches tests/**/* for c/c++');
+  assert(!rxDir.test('/project/src/login_server.cpp'), 'rejects non-test c/c++ file');
+});
+
+group('globToRegex — Swift test files', () => {
+  const rxSuffix = globToRegex('**/*Tests.swift');
+  assert(rxSuffix.test('/project/Tests/LoginServerTests.swift'), 'matches *Tests.swift');
+
+  const rxDir = globToRegex('**/Tests/**/*.swift');
+  assert(rxDir.test('/project/Tests/Feature/LoginServerSpec.swift'), 'matches Tests/**/*.swift');
+  assert(!rxDir.test('/project/Sources/LoginServer.swift'), 'rejects swift source outside Tests/');
+});
+
+group('globToRegex — Kotlin test files', () => {
+  const rxSuffix = globToRegex('**/*Spec.kt');
+  assert(rxSuffix.test('/project/src/test/kotlin/LoginServerSpec.kt'), 'matches *Spec.kt');
+
+  const rxDir = globToRegex('**/src/test/**/*.kt');
+  assert(rxDir.test('/project/src/test/kotlin/LoginServerTest.kt'), 'matches src/test/**/*.kt');
+  assert(!rxDir.test('/project/src/main/kotlin/LoginServer.kt'), 'rejects kotlin source outside src/test');
+});
+
+group('globToRegex — Rust test files', () => {
+  const rxSuffix = globToRegex('**/*_tests.rs');
+  assert(rxSuffix.test('/project/src/login_server_tests.rs'), 'matches *_tests.rs');
+
+  const rxDir = globToRegex('**/benches/**/*.rs');
+  assert(rxDir.test('/project/benches/login_server_bench.rs'), 'matches benches/**/*.rs');
+  assert(!rxDir.test('/project/src/lib.rs'), 'rejects rust source outside benches/');
+});
+
+group('globToRegex — C# test files', () => {
+  const rxSuffix = globToRegex('**/*Test.cs');
+  assert(rxSuffix.test('/project/tests/LoginServerTest.cs'), 'matches *Test.cs');
+
+  const rxDir = globToRegex('**/Tests/**/*.cs');
+  assert(rxDir.test('/project/Tests/Feature/LoginServerTests.cs'), 'matches Tests/**/*.cs');
+  assert(!rxDir.test('/project/src/Program.cs'), 'rejects csharp source outside Tests/');
+});
+
 // ── decodeTokens tests ────────────────────────────────────────────────────────
 
 group('decodeTokens — single token', () => {
@@ -147,6 +223,36 @@ group('decodeTokens — malformed data (length not multiple of 5)', () => {
   const data = new Uint32Array([0, 0, 3, 1, 0,  0, 5, 2, 0]);
   const tokens = decodeTokens(data);
   assert(tokens.length === 1, 'processes only complete groups');
+});
+
+// ── Text search history tests ────────────────────────────────────────────────
+
+group('Text search history — normalize limit clamps invalid values', () => {
+  assert(normalizeTextSearchHistoryLimit(undefined) === DEFAULT_TEXT_SEARCH_HISTORY_LIMIT, 'uses default for undefined');
+  assert(normalizeTextSearchHistoryLimit(0) === 1, 'clamps lower bound');
+  assert(normalizeTextSearchHistoryLimit(999) === 100, 'clamps upper bound');
+  assert(normalizeTextSearchHistoryLimit(12.9) === 12, 'floors decimal values');
+});
+
+group('Text search history — sanitize trims, dedupes, and caps entries', () => {
+  assertDeepEqual(
+    sanitizeTextSearchHistory([' foo ', '', 'bar', ' foo ', 'baz'], 2),
+    [' foo ', 'bar'],
+    'keeps first unique entries and preserves exact query text within limit',
+  );
+});
+
+group('Text search history — push promotes latest query and removes duplicates', () => {
+  assertDeepEqual(
+    pushTextSearchHistory(['alpha', ' beta ', 'gamma'], ' beta ', 3),
+    [' beta ', 'alpha', 'gamma'],
+    'moves exact existing query to front without trimming',
+  );
+  assertDeepEqual(
+    pushTextSearchHistory(['alpha', 'beta'], 'delta', 2),
+    ['delta', 'alpha'],
+    'adds new query to front and truncates overflow',
+  );
 });
 
 group('decodeTokens — empty data', () => {
@@ -331,6 +437,334 @@ group('buildDirIndex — nested dirs', () => {
 group('buildDirIndex — empty input', () => {
   const index = buildDirIndex([]);
   assert(index.size === 0, 'empty files produces empty index');
+});
+
+
+// ── Project layout grouping tests ───────────────────────────────────────────
+
+group('Project layout detection — generated marker coverage', () => {
+  const positiveCases = [
+    ['CMakeLists.txt'],
+    ['makefile'],
+    ['build/common.mk'],
+    ['LobbyServer.sln'],
+    ['BaseGameServer/BaseGameServer.vcxproj'],
+    ['Package.swift'],
+    ['Cargo.toml'],
+    ['build.gradle.kts'],
+    ['pom.xml'],
+    ['App/App.csproj'],
+    ['src/a.cpp', 'src/b.cpp', 'src/c.cpp', 'include/a.h'],
+    ['src/a.swift', 'src/b.swift', 'src/c.swift', 'src/d.swift', 'src/e.swift'],
+  ];
+  for (const files of positiveCases) {
+    assert(looksLikeCppProject(files), `detects engineering project: ${files.join(', ')}`);
+  }
+
+  const negativeCases = [
+    ['README.md', 'docs/guide.md'],
+    ['src/app.js', 'src/util.js', 'package.json'],
+    ['src/main.py', 'requirements.txt'],
+  ];
+  for (const files of negativeCases) {
+    assert(!looksLikeCppProject(files), `does not over-detect engineering project: ${files.join(', ')}`);
+  }
+});
+
+group('Project layout view modes — unsupported mode falls back safely', () => {
+  const plainModes = getAvailableProjectViewModes(false);
+  assert(plainModes.length === 3, 'plain workspace keeps 3 modes');
+  assert(plainModes.includes('hotspot'), 'plain workspace includes hotspot mode');
+  assert(!plainModes.includes('cpp-project'), 'plain workspace hides project layout mode');
+
+  const projectModes = getAvailableProjectViewModes(true);
+  assert(projectModes.includes('cpp-project'), 'engineering workspace exposes project layout mode');
+
+  const modeCases = [
+    ['cpp-project', true, 'cpp-project', 'supported project layout mode is preserved'],
+    ['cpp-project', false, 'merged', 'unsupported project layout mode falls back to merged'],
+    ['categorized', false, 'categorized', 'supported categorized mode is preserved'],
+    ['merged', false, 'merged', 'merged mode stays merged'],
+  ];
+  for (const [mode, isProject, expected, label] of modeCases) {
+    assert(resolveProjectViewMode(mode, isProject) === expected, label);
+  }
+});
+
+group('Project layout grouping — category classification matrix', () => {
+  const makeCases = (values, buildCase) => values.map(value => buildCase(value));
+  const generatedHeaderExtensions = new Set(['.pb.h', '.pb.hxx', '.pb.hpp', '.g.h', '.g.hpp']);
+
+  const cases = [
+    ...makeCases(PROJECT_LAYOUT_RULES.thirdPartySegments, segment => ({
+      path: `${segment}/src/module.cpp`,
+      isTest: false,
+      expected: 'cppThirdParty',
+      reason: `third-party segment is classified first (${segment})`,
+    })),
+    ...makeCases(PROJECT_LAYOUT_RULES.buildFileNames, fileName => ({
+      path: `build/${fileName}`,
+      isTest: false,
+      expected: 'cppBuild',
+      reason: `build file name is detected (${fileName})`,
+    })),
+    ...makeCases(PROJECT_LAYOUT_RULES.buildExtensions, extension => ({
+      path: `build/project${extension}`,
+      isTest: false,
+      expected: 'cppBuild',
+      reason: `build extension is detected (${extension})`,
+    })),
+    {
+      path: 'ios/App.xcodeproj/project.pbxproj',
+      isTest: false,
+      expected: 'cppBuild',
+      reason: 'xcode project segment is detected',
+    },
+    {
+      path: 'apple/App.xcworkspace/contents.xcworkspacedata',
+      isTest: false,
+      expected: 'cppBuild',
+      reason: 'xcworkspace segment is detected',
+    },
+    ...makeCases(PROJECT_LAYOUT_RULES.testSegments, segment => ({
+      path: `src/${segment}/module.cpp`,
+      isTest: false,
+      expected: 'cppTests',
+      reason: `test segment is detected (${segment})`,
+    })),
+    {
+      path: 'src/test_helper.cpp',
+      isTest: false,
+      expected: 'cppTests',
+      reason: 'test filename prefix is detected',
+    },
+    {
+      path: 'src/login_spec.cpp',
+      isTest: false,
+      expected: 'cppTests',
+      reason: 'test filename suffix is detected',
+    },
+    {
+      path: 'src/widget.test.hpp',
+      isTest: false,
+      expected: 'cppTests',
+      reason: 'test filename dotted form is detected',
+    },
+    ...makeCases(PROJECT_LAYOUT_RULES.generatedExtensions, extension => ({
+      path: `src/artifact${extension}`,
+      isTest: false,
+      expected: generatedHeaderExtensions.has(extension) ? 'cppIncludes' : 'cppModules',
+      reason: `generated extension keeps header/module ownership (${extension})`,
+    })),
+    {
+      path: 'src/player_generated.h',
+      isTest: false,
+      expected: 'cppIncludes',
+      reason: 'generated suffix _generated.h still belongs to headers',
+    },
+    {
+      path: 'src/player_generated.hpp',
+      isTest: false,
+      expected: 'cppIncludes',
+      reason: 'generated suffix _generated.hpp still belongs to headers',
+    },
+    {
+      path: 'src/player_generated.cpp',
+      isTest: false,
+      expected: 'cppModules',
+      reason: 'generated suffix _generated.cpp still belongs to modules',
+    },
+    ...makeCases(PROJECT_LAYOUT_RULES.generatedSegments, segment => ({
+      path: `src/${segment}/artifact.json`,
+      isTest: false,
+      expected: 'cppModules',
+      reason: `generated segment no longer creates a standalone category (${segment})`,
+    })),
+    ...makeCases(PROJECT_LAYOUT_RULES.includeSegments, segment => ({
+      path: `src/${segment}/schema.json`,
+      isTest: false,
+      expected: 'cppIncludes',
+      reason: `include segment is detected (${segment})`,
+    })),
+    ...makeCases(PROJECT_LAYOUT_RULES.headerExtensions, extension => ({
+      path: `src/header${extension}`,
+      isTest: false,
+      expected: 'cppIncludes',
+      reason: `header extension is grouped into headers (${extension})`,
+    })),
+    ...makeCases(PROJECT_LAYOUT_RULES.sourceExtensions, extension => ({
+      path: `src/module${extension}`,
+      isTest: false,
+      expected: 'cppModules',
+      reason: `source file falls back to modules (${extension})`,
+    })),
+    {
+      path: 'assets/schema.json',
+      isTest: false,
+      expected: 'cppModules',
+      reason: 'unmatched file falls back to modules',
+    },
+    {
+      path: String.raw`src\windows\path\module.cpp`,
+      isTest: false,
+      expected: 'cppModules',
+      reason: 'windows backslashes are normalized before classification',
+    },
+    {
+      path: 'src//generated///foo.pb.cpp',
+      isTest: false,
+      expected: 'cppModules',
+      reason: 'repeated posix separators are normalized before classification',
+    },
+    {
+      path: 'third_party/CMakeLists.txt',
+      isTest: false,
+      expected: 'cppThirdParty',
+      reason: 'third-party overrides build',
+    },
+    {
+      path: 'external/include/foo.pb.h',
+      isTest: false,
+      expected: 'cppThirdParty',
+      reason: 'third-party overrides generated and include',
+    },
+    {
+      path: 'tests/CMakeLists.txt',
+      isTest: false,
+      expected: 'cppBuild',
+      reason: 'build file names override test segments',
+    },
+    {
+      path: 'generated/project.vcxproj',
+      isTest: false,
+      expected: 'cppBuild',
+      reason: 'build extensions override generated segments',
+    },
+    {
+      path: 'tests/generated/foo.pb.cpp',
+      isTest: false,
+      expected: 'cppTests',
+      reason: 'test path overrides generated when matching test rules',
+    },
+    {
+      path: 'proto/generated/foo.pb.cpp',
+      isTest: true,
+      expected: 'cppTests',
+      reason: 'explicit test flag overrides generated files',
+    },
+    {
+      path: 'tests/include/player.h',
+      isTest: false,
+      expected: 'cppTests',
+      reason: 'tests override include',
+    },
+    {
+      path: String.raw`.\tests\generated\foo.pb.cpp`,
+      isTest: false,
+      expected: 'cppTests',
+      reason: 'mixed windows-style test path still keeps test priority',
+    },
+    {
+      path: 'include/generated.pb.h',
+      isTest: false,
+      expected: 'cppIncludes',
+      reason: 'generated headers under include stay in headers',
+    },
+  ];
+
+  for (const item of cases) {
+    assert(
+      classifyCppProjectPath(item.path, item.isTest) === item.expected,
+      `${item.reason}: ${item.path} -> ${item.expected}`,
+    );
+  }
+});
+
+
+
+group('Project layout detection — heuristic fallback when no build files present', () => {
+  const fiveSources = ['src/a.cpp', 'src/b.cpp', 'src/c.cpp', 'src/d.cpp', 'src/e.cpp'];
+  assertDeepEqual(detectProjectRoots(fiveSources), [''], 'detects workspace root for 5+ source files without build file');
+
+  const threeSourcesOneHeader = ['src/a.cpp', 'src/b.cpp', 'src/c.cpp', 'include/d.h'];
+  assertDeepEqual(detectProjectRoots(threeSourcesOneHeader), [''], 'heuristic applies with 3+ sources and 1+ header');
+
+  const fewSources = ['src/a.cpp', 'src/b.cpp'];
+  assertDeepEqual(detectProjectRoots(fewSources), [], 'no heuristic for too few source files');
+
+  const nonCppFiles = ['main.py', 'utils.py', 'server.py', 'client.py', 'config.py'];
+  assertDeepEqual(detectProjectRoots(nonCppFiles), [], 'no heuristic for non-cpp projects');
+});
+
+group('Project layout detection — Xcode project root is parent of .xcodeproj', () => {
+  // xcodeIndex > 0: nested .xcodeproj should return its parent directory
+  assertDeepEqual(detectProjectRoots(['ios/App.xcodeproj/project.pbxproj']), ['ios'], 'nested .xcodeproj returns parent dir');
+  // xcodeIndex === 0: root-level .xcodeproj should return workspace root ('')
+  assertDeepEqual(detectProjectRoots(['MyApp.xcodeproj/project.pbxproj']), [''], 'root-level .xcodeproj returns workspace root');
+  assertDeepEqual(detectProjectRoots(['App.xcworkspace/contents.xcworkspacedata']), [''], 'root-level .xcworkspace returns workspace root');
+});
+
+group('Project layout detection — multi-project roots resolve to nearest build file', () => {
+  const roots = detectProjectRoots([
+    'pom.xml',
+    'module-a/pom.xml',
+    'module-b/build.gradle.kts',
+    'native/CMakeLists.txt',
+    'module-a/src/main/java/App.java',
+  ]);
+  assertDeepEqual(roots, ['', 'module-a', 'module-b', 'native'], 'detects root and nested project roots');
+  assert(resolveProjectRoot('module-a/src/main/java/App.java', roots) === 'module-a', 'java file resolves to nearest maven module');
+  assert(resolveProjectRoot('module-b/src/main/kotlin/App.kt', roots) === 'module-b', 'gradle file resolves to nearest gradle module');
+  assert(resolveProjectRoot('native/src/main.cpp', roots) === 'native', 'native file resolves to nearest cmake module');
+  assert(resolveProjectRoot('README.md', roots) === '', 'root file falls back to workspace root project');
+});
+
+group('Project layout dimming — merged tests only dim when colocated with sources', () => {
+  const dimmedCases = [
+    'pkg/foo_test.go',
+    'src/FooTest.java',
+    'src/service_spec.cpp',
+  ];
+  for (const file of dimmedCases) {
+    assert(shouldDimMergedTestFile(file), `colocated test stays dimmed: ${file}`);
+  }
+
+  const normalCases = [
+    'src/test/java/com/acme/AppTest.java',
+    'tests/main_test.cpp',
+    'module/Tests/AppTests.swift',
+    'pkg/test/foo_test.go',
+    'crates/service/benches/service_bench.rs',
+  ];
+  for (const file of normalCases) {
+    assert(!shouldDimMergedTestFile(file), `dedicated test directory stays normal: ${file}`);
+  }
+});
+
+group('Project layout dimming — generated-like paths stay narrow', () => {
+  const generatedCases = [
+    'src/generated/foo.pb.cpp',
+    'src/gen/foo.pb.h',
+    'src/autogen/player_generated.cpp',
+    'proto/generated/foo.pb.hpp',
+    String.raw`src\generated\foo.g.cpp`,
+  ];
+  for (const file of generatedCases) {
+    assert(isGeneratedProjectPath(file), `generated output is dimmed: ${file}`);
+  }
+
+  const sourceCases = [
+    'proto/user.proto',
+    'protobuf/service.proto',
+    'idl/user.thrift',
+    'flatbuffers/game.fbs',
+    'thrift/service.thrift',
+    'proto/README.md',
+    'idl/schema.json',
+  ];
+  for (const file of sourceCases) {
+    assert(!isGeneratedProjectPath(file), `handwritten definition stays normal: ${file}`);
+  }
 });
 
 // ── Search Type filtering tests ─────────────────────────────────────────────
@@ -746,8 +1180,50 @@ function findCommentStart(languageId, lineText) {
 function buildSectionLabel(match, options) {
   const parts = [];
   if (options.groupCodeAndComments) parts.push(match.contentKind === 'comment' ? 'Comments' : 'Code');
-  if (options.groupConfigAndCodeFiles) parts.push(match.fileKind === 'config' ? 'Config Files' : 'Code Files');
+  if (options.groupConfigAndCodeFiles) {
+    parts.push(match.fileKind === 'config' ? 'Config Files' : match.fileKind === 'other' ? 'Other Files' : 'Code Files');
+  }
   return parts.join(' · ') || 'All';
+}
+
+const TEXT_SEARCH_CONFIG_BASENAMES = new Set([
+  'package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml',
+  'cargo.toml', 'cargo.lock', 'pyproject.toml', 'requirements.txt', 'pipfile', 'pipfile.lock',
+  'poetry.lock', 'setup.py', 'setup.cfg', 'go.mod', 'go.sum', 'makefile', 'cmakelists.txt',
+  '.editorconfig', '.gitignore', '.gitattributes', '.npmrc', '.yarnrc', '.yarnrc.yml', '.prettierrc',
+  '.prettierrc.json', '.prettierrc.yaml', '.eslintrc', '.eslintrc.json', '.eslintrc.yaml',
+  'tsconfig.json', 'jsconfig.json', 'vite.config.ts', 'vite.config.js', 'webpack.config.js',
+  'dockerfile', 'docker-compose.yml', 'docker-compose.yaml', '.env', '.env.local', '.env.test',
+  '.env.production', 'pubspec.yaml', 'pubspec.lock', 'gradle.properties', 'settings.gradle',
+]);
+
+const TEXT_SEARCH_CONFIG_EXTENSIONS = new Set([
+  '.json', '.jsonc', '.yaml', '.yml', '.toml', '.ini', '.properties', '.env', '.conf', '.config',
+  '.xml', '.editorconfig', '.gitignore', '.gitattributes', '.lock',
+]);
+
+const TEXT_SEARCH_OTHER_EXTENSIONS = new Set([
+  '.md', '.mdx', '.txt', '.rst', '.adoc', '.asciidoc',
+]);
+
+const TEXT_SEARCH_OTHER_LANGUAGE_IDS = new Set([
+  'markdown', 'plaintext',
+]);
+
+function isStructuredTextLanguageForTests(languageId) {
+  return new Set(['toml', 'yaml', 'json', 'jsonc', 'ini', 'properties', 'markdown', 'xml', 'html', 'makefile', 'make']).has(languageId);
+}
+
+function detectTextSearchFileKindForTests(filePath, languageId) {
+  const normalized = String(filePath).replace(/\\/g, '/');
+  const base = normalized.split('/').pop().toLowerCase();
+  if (TEXT_SEARCH_CONFIG_BASENAMES.has(base)) return 'config';
+  const dot = base.lastIndexOf('.');
+  const ext = dot >= 0 ? base.slice(dot) : '';
+  if (TEXT_SEARCH_CONFIG_EXTENSIONS.has(ext)) return 'config';
+  if (TEXT_SEARCH_OTHER_EXTENSIONS.has(ext) || TEXT_SEARCH_OTHER_LANGUAGE_IDS.has(languageId)) return 'other';
+  if (isStructuredTextLanguageForTests(languageId) && !['markdown', 'html', 'xml'].includes(languageId)) return 'config';
+  return 'code';
 }
 
 function shortenTitlePart(value, maxLength) {
@@ -880,6 +1356,33 @@ group('Text search sections — builds configurable section labels', () => {
   assert(
     buildSectionLabel(match, { groupCodeAndComments: true, groupConfigAndCodeFiles: false }) === 'Comments',
     'supports code/comment grouping only',
+  );
+  assert(
+    buildSectionLabel({ contentKind: 'code', fileKind: 'other' }, { groupCodeAndComments: false, groupConfigAndCodeFiles: true }) === 'Other Files',
+    'supports non-code files grouped into other files',
+  );
+});
+
+group('Text search file kind — treats hard-to-classify non-code files as other files', () => {
+  assert(
+    detectTextSearchFileKindForTests('docs/archive/design/directpay.md', 'markdown') === 'other',
+    'markdown files are grouped into other files',
+  );
+  assert(
+    detectTextSearchFileKindForTests('README.md', 'plaintext') === 'other',
+    'markdown extension is enough to classify README docs as other files',
+  );
+  assert(
+    detectTextSearchFileKindForTests('docs/notes/directpay.txt', 'plaintext') === 'other',
+    'plain text docs are grouped into other files',
+  );
+  assert(
+    detectTextSearchFileKindForTests('config/app.yaml', 'yaml') === 'config',
+    'real config files stay in config files',
+  );
+  assert(
+    detectTextSearchFileKindForTests('internal/directpay/service.go', 'go') === 'code',
+    'real source files stay in code files',
   );
 });
 

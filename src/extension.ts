@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { ReferenceTreeProvider, ReferenceScopeFilter, ReferenceGroupingMode, PinnedReferenceResult } from './providers/ReferenceTreeProvider';
+import { ReferenceTreeProvider, ReferenceScopeFilter, ReferenceGroupingMode, PinnedReferenceResult, SerializedPin } from './providers/ReferenceTreeProvider';
 import { ReferenceLensProvider } from './providers/ReferenceLensProvider';
 import { ReferenceClassifier } from './core/ReferenceClassifier';
 import { ReferenceCache } from './core/Cache';
@@ -28,14 +28,26 @@ import { NodeDepSymbolIndexer } from './core/NodeDepSymbolIndexer';
 import { SymbolCategory } from './core/SymbolRanker';
 import { ProjectExplorerProvider, ProjectTestDecorationProvider, resolveRealUri, PROJ_TEST_SCHEME } from './providers/ProjectExplorerProvider';
 import { StructureTreeProvider } from './providers/StructureTreeProvider';
+import { ProjectViewMode } from './providers/ProjectExplorerGrouping';
 import { ImplInlayHintsProvider } from './providers/ImplInlayHintsProvider';
 import { TranslationManager } from './providers/TranslationManager';
 import { ProtoWorkspaceNavigator } from './core/ProtoWorkspaceNavigator';
 import { ProtoSymbolNavigationProvider } from './providers/ProtoSymbolNavigationProvider';
+import { DEFAULT_TEXT_SEARCH_HISTORY_LIMIT, normalizeTextSearchHistoryLimit, pushTextSearchHistory, sanitizeTextSearchHistory } from './core/TextSearchHistory';
 import { t } from './i18n';
 
-export function activate(context: vscode.ExtensionContext): void {
+export interface SmartReferencesExtensionApi {
+  refreshProjectExplorer(force?: boolean): Promise<void>;
+  getProjectExplorerState(): {
+    currentViewMode: ProjectViewMode;
+    availableViewModes: ProjectViewMode[];
+  };
+  setProjectExplorerViewMode(mode: ProjectViewMode): Promise<void>;
+}
+
+export function activate(context: vscode.ExtensionContext): SmartReferencesExtensionApi {
   const outputChannel = vscode.window.createOutputChannel('IntelliJ-Style References');
+  const TEXT_SEARCH_HISTORY_STORAGE_KEY = 'smartReferences.textSearchHistory';
 
   const cache = new ReferenceCache();
   const testDetector = new TestFileDetector();
@@ -43,9 +55,34 @@ export function activate(context: vscode.ExtensionContext): void {
   const classifier = new ReferenceClassifier(testDetector, cache, protoNavigator);
   const treeProvider = new ReferenceTreeProvider();
   treeProvider.setScopeAnchor(vscode.window.activeTextEditor?.document.uri);
+
+  const PINS_STORAGE_KEY = 'smartReferences.pinnedResults';
+  const savedPins = context.workspaceState.get<SerializedPin[]>(PINS_STORAGE_KEY, []);
+  if (savedPins.length > 0) {
+    try {
+      treeProvider.loadPins(ReferenceTreeProvider.deserializePins(savedPins));
+    } catch { /* ignore corrupted storage */ }
+  }
+  let pinPersistTimer: ReturnType<typeof setTimeout> | undefined;
+  context.subscriptions.push(
+    treeProvider.onPinnedResultsChanged(() => {
+      if (pinPersistTimer) clearTimeout(pinPersistTimer);
+      pinPersistTimer = setTimeout(() => {
+        void context.workspaceState.update(PINS_STORAGE_KEY, treeProvider.serializePins());
+      }, 300);
+    }),
+  );
   const lensProvider = new ReferenceLensProvider(testDetector);
   const previewer = new ReferencePreviewManager();
   const textSearchProvider = new TextSearchTreeProvider();
+  const getTextSearchHistoryLimit = (): number => normalizeTextSearchHistoryLimit(
+    vscode.workspace.getConfiguration('smartReferences').get<number>('textSearch.historySize', DEFAULT_TEXT_SEARCH_HISTORY_LIMIT),
+  );
+  let textSearchHistory = sanitizeTextSearchHistory(
+    context.workspaceState.get<string[]>(TEXT_SEARCH_HISTORY_STORAGE_KEY, []),
+    getTextSearchHistoryLimit(),
+  );
+  void context.workspaceState.update(TEXT_SEARCH_HISTORY_STORAGE_KEY, textSearchHistory);
 
   const hierarchyProvider = new TypeHierarchyTreeProvider(testDetector);
   const symbolSearch = new SymbolSearchProvider(previewer, testDetector, outputChannel, protoNavigator);
@@ -205,9 +242,14 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     projectExplorerView.title = title;
   }
-  // Init context for toggle button
-  vscode.commands.executeCommand('setContext', 'smartReferences.projectViewCategorized', false);
+  const updateProjectExplorerMessage = () => {
+    projectExplorerView.message = projectExplorer.getStatusMessage() ?? '';
+  };
   const projTestDecoration = vscode.window.registerFileDecorationProvider(new ProjectTestDecorationProvider());
+  const projectExplorerStateListener = projectExplorer.onDidChangeTreeData(() => {
+    updateProjectExplorerMessage();
+  });
+  updateProjectExplorerMessage();
   projectExplorer.setVisible(projectExplorerView.visible);
   const projectExplorerVisibilityListener = projectExplorerView.onDidChangeVisibility(e => {
     projectExplorer.setVisible(e.visible);
@@ -413,6 +455,9 @@ export function activate(context: vscode.ExtensionContext): void {
             return;
           }
           treeProvider.setResults(symbolName, refs, uri);
+          if (projectExplorer.getCurrentViewMode() === 'hotspot') {
+            projectExplorer.updateHitCounts(treeProvider.getFileHitCounts());
+          }
           refreshReferenceTitle();
           updateRefHistoryContext();
           scheduleRevealActiveReference(vscode.window.activeTextEditor);
@@ -747,6 +792,56 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  const persistTextSearchHistory = async (): Promise<void> => {
+    await context.workspaceState.update(TEXT_SEARCH_HISTORY_STORAGE_KEY, textSearchHistory);
+  };
+
+  const refreshTextSearchHistoryFromConfig = async (): Promise<void> => {
+    const nextHistory = sanitizeTextSearchHistory(textSearchHistory, getTextSearchHistoryLimit());
+    const unchanged = nextHistory.length === textSearchHistory.length
+      && nextHistory.every((entry, index) => entry === textSearchHistory[index]);
+    if (unchanged) return;
+    textSearchHistory = nextHistory;
+    await persistTextSearchHistory();
+  };
+
+  const appendTextSearchHistory = async (query: string): Promise<void> => {
+    const nextHistory = pushTextSearchHistory(textSearchHistory, query, getTextSearchHistoryLimit());
+    const unchanged = nextHistory.length === textSearchHistory.length
+      && nextHistory.every((entry, index) => entry === textSearchHistory[index]);
+    if (unchanged) return;
+    textSearchHistory = nextHistory;
+    await persistTextSearchHistory();
+  };
+  type ActiveTextSearchInputState = {
+    inputBox: vscode.InputBox;
+    historyIndex: number;
+    draftValue: string;
+  };
+  let activeTextSearchInputState: ActiveTextSearchInputState | undefined;
+
+  const setActiveTextSearchInputState = (state: ActiveTextSearchInputState | undefined): void => {
+    activeTextSearchInputState = state;
+    void vscode.commands.executeCommand('setContext', 'smartReferences.textSearchInputActive', Boolean(state));
+  };
+
+  const applyTextSearchHistory = (direction: 'previous' | 'next'): void => {
+    const state = activeTextSearchInputState;
+    if (!state) return;
+    const history = textSearchHistory;
+    if (history.length === 0) return;
+    if (direction === 'previous') {
+      if (state.historyIndex === -1) state.draftValue = state.inputBox.value;
+      if (state.historyIndex < history.length - 1) state.historyIndex += 1;
+    } else {
+      if (state.historyIndex === -1) return;
+      state.historyIndex -= 1;
+    }
+    state.inputBox.value = state.historyIndex === -1
+      ? state.draftValue
+      : history[state.historyIndex];
+  };
+
   const refreshTextSearchResults = async (showWarning = true): Promise<void> => {
     try {
       const applied = await textSearchProvider.refresh();
@@ -797,7 +892,6 @@ export function activate(context: vscode.ExtensionContext): void {
           ? t('代码 / 配置文件', 'Code / Config Files')
           : t('组合分组', 'Combined Grouping')
   );
-
   const applyTextSearchDraft = async (
     nextDraft: TextSearchRequest,
     successMessage?: string,
@@ -922,15 +1016,51 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const configureTextSearch = async (queryOverride?: string): Promise<boolean> => {
     const items = [
-      { label: t('包含文件', 'Include Files'), description: textSearchDraftRequest.include || t('未设置', 'Not set'), action: 'include' as const },
-      { label: t('排除文件', 'Exclude Files'), description: textSearchDraftRequest.exclude || t('未设置', 'Not set'), action: 'exclude' as const },
-      { label: t('区分大小写', 'Match Case'), description: textSearchDraftRequest.matchCase ? t('已开启', 'Enabled') : t('已关闭', 'Disabled'), action: 'matchCase' as const },
-      { label: t('整词匹配', 'Whole Word'), description: textSearchDraftRequest.matchWholeWord ? t('已开启', 'Enabled') : t('已关闭', 'Disabled'), action: 'wholeWord' as const },
-      { label: t('正则搜索', 'Regex'), description: textSearchDraftRequest.useRegExp ? t('已开启', 'Enabled') : t('已关闭', 'Disabled'), action: 'regex' as const },
-      { label: t('模糊搜索', 'Fuzzy Search'), description: textSearchDraftRequest.fuzzySearch ? t('已开启', 'Enabled') : t('已关闭', 'Disabled'), action: 'fuzzy' as const },
-      { label: t('结果分组', 'Grouping'), description: getTextSearchGroupingLabel(), action: 'grouping' as const },
+      {
+        label: t('包含的文件', 'Files to Include'),
+        description: textSearchDraftRequest.include || t('全部文件', 'All files'),
+        detail: t('设置要搜索的文件 glob，例如 src/**/*.ts', 'Set the file glob to search, for example src/**/*.ts'),
+        action: 'include' as const,
+      },
+      {
+        label: t('排除的文件', 'Files to Exclude'),
+        description: textSearchDraftRequest.exclude || t('无额外排除', 'No extra exclude'),
+        detail: t('设置要忽略的文件 glob，例如 **/*.spec.ts', 'Set the file glob to ignore, for example **/*.spec.ts'),
+        action: 'exclude' as const,
+      },
+      {
+        label: t('区分大小写', 'Match Case'),
+        description: textSearchDraftRequest.matchCase ? t('已开启', 'Enabled') : t('已关闭', 'Disabled'),
+        detail: t('大小写必须完全一致', 'Letter case must match exactly'),
+        action: 'matchCase' as const,
+      },
+      {
+        label: t('整词匹配', 'Whole Word'),
+        description: textSearchDraftRequest.matchWholeWord ? t('已开启', 'Enabled') : t('已关闭', 'Disabled'),
+        detail: t('只匹配完整单词边界', 'Match only complete word boundaries'),
+        action: 'wholeWord' as const,
+      },
+      {
+        label: t('正则搜索', 'Regex'),
+        description: textSearchDraftRequest.useRegExp ? t('已开启', 'Enabled') : t('已关闭', 'Disabled'),
+        detail: t('使用正则表达式查找', 'Search using regular expressions'),
+        action: 'regex' as const,
+      },
+      {
+        label: t('模糊搜索', 'Fuzzy Search'),
+        description: textSearchDraftRequest.fuzzySearch ? t('已开启', 'Enabled') : t('已关闭', 'Disabled'),
+        detail: t('按子序列模糊匹配，适合不完整关键词', 'Use subsequence fuzzy matching for incomplete keywords'),
+        action: 'fuzzy' as const,
+      },
+      {
+        label: t('结果分组', 'Grouping'),
+        description: getTextSearchGroupingLabel(),
+        detail: t('调整搜索结果的展示结构', 'Adjust how search results are grouped'),
+        action: 'grouping' as const,
+      },
     ];
     const pick = await vscode.window.showQuickPick(items, {
+      title: t('搜索选项', 'Search Options'),
       placeHolder: t('选择要调整的一项搜索设置', 'Choose one search setting to adjust'),
       ignoreFocusOut: true,
     });
@@ -944,80 +1074,141 @@ export function activate(context: vscode.ExtensionContext): void {
     return await setTextSearchGrouping(queryOverride);
   };
 
-  const createTextSearchIconPath = (name: string): { light: vscode.Uri; dark: vscode.Uri } => ({
-    light: vscode.Uri.file(path.join(context.extensionPath, 'images', 'text-search', `${name}-light.svg`)),
-    dark: vscode.Uri.file(path.join(context.extensionPath, 'images', 'text-search', `${name}-dark.svg`)),
-  });
-
   const promptTextSearchQuery = async (initialValue: string): Promise<{ kind: string; query: string } | undefined> => {
-    const input = vscode.window.createInputBox();
-    input.title = t('搜索增强', 'Search Enhancement');
-    input.prompt = t('搜索内容', 'Search');
-    input.placeholder = t('输入要搜索的文本', 'Enter text to search');
-    input.value = initialValue;
-    input.ignoreFocusOut = true;
+    const inputBox = vscode.window.createInputBox();
+    inputBox.title = t('搜索增强', 'Search Enhancement');
+    inputBox.prompt = t('搜索内容', 'Search');
+    inputBox.placeholder = t('输入要搜索的文本；可用上下方向键切换搜索历史', 'Enter text to search. Use Up/Down to browse search history.');
+    inputBox.value = initialValue;
+    inputBox.ignoreFocusOut = true;
 
-    const buttons = {
+    const createButtons = () => ({
       include: {
-        iconPath: textSearchDraftRequest.include ? createTextSearchIconPath('filter-active') : new vscode.ThemeIcon('filter'),
+        iconPath: new vscode.ThemeIcon(textSearchDraftRequest.include ? 'filter-filled' : 'filter'),
         tooltip: `${t('包含文件', 'Include Files')}: ${textSearchDraftRequest.include || t('未设置', 'Not set')}`,
+        location: vscode.QuickInputButtonLocation.Inline,
       },
       exclude: {
-        iconPath: textSearchDraftRequest.exclude ? createTextSearchIconPath('exclude-active') : createTextSearchIconPath('exclude'),
+        iconPath: new vscode.ThemeIcon('exclude'),
         tooltip: `${t('排除文件', 'Exclude Files')}: ${textSearchDraftRequest.exclude || t('未设置', 'Not set')}`,
+        location: vscode.QuickInputButtonLocation.Inline,
       },
       matchCase: {
-        iconPath: textSearchDraftRequest.matchCase ? createTextSearchIconPath('case-active') : new vscode.ThemeIcon('case-sensitive'),
-        tooltip: `${t('区分大小写', 'Match Case')}: ${textSearchDraftRequest.matchCase ? t('开', 'On') : t('关', 'Off')}`,
+        iconPath: new vscode.ThemeIcon('case-sensitive'),
+        tooltip: t('区分大小写', 'Match Case'),
+        location: vscode.QuickInputButtonLocation.Input,
+        toggle: { checked: textSearchDraftRequest.matchCase },
       },
       wholeWord: {
-        iconPath: textSearchDraftRequest.matchWholeWord ? createTextSearchIconPath('word-active') : new vscode.ThemeIcon('whole-word'),
-        tooltip: `${t('整词匹配', 'Whole Word')}: ${textSearchDraftRequest.matchWholeWord ? t('开', 'On') : t('关', 'Off')}`,
+        iconPath: new vscode.ThemeIcon('whole-word'),
+        tooltip: t('整词匹配', 'Whole Word'),
+        location: vscode.QuickInputButtonLocation.Input,
+        toggle: { checked: textSearchDraftRequest.matchWholeWord },
       },
       regex: {
-        iconPath: textSearchDraftRequest.useRegExp ? createTextSearchIconPath('regex-active') : new vscode.ThemeIcon('regex'),
-        tooltip: `${t('正则搜索', 'Regex')}: ${textSearchDraftRequest.useRegExp ? t('开', 'On') : t('关', 'Off')}`,
+        iconPath: new vscode.ThemeIcon('regex'),
+        tooltip: t('正则搜索', 'Regex'),
+        location: vscode.QuickInputButtonLocation.Input,
+        toggle: { checked: textSearchDraftRequest.useRegExp },
       },
       fuzzy: {
-        iconPath: textSearchDraftRequest.fuzzySearch ? createTextSearchIconPath('fuzzy-active') : new vscode.ThemeIcon('symbol-string'),
-        tooltip: `${t('模糊搜索', 'Fuzzy Search')}: ${textSearchDraftRequest.fuzzySearch ? t('开', 'On') : t('关', 'Off')}`,
+        iconPath: new vscode.ThemeIcon('search-fuzzy'),
+        tooltip: t('模糊搜索', 'Fuzzy Search'),
+        location: vscode.QuickInputButtonLocation.Input,
+        toggle: { checked: textSearchDraftRequest.fuzzySearch },
       },
-      grouping: { iconPath: new vscode.ThemeIcon('list-tree'), tooltip: `${t('结果分组', 'Grouping')}: ${getTextSearchGroupingLabel()}` },
-    } as const;
-    input.buttons = [
-      buttons.include,
-      buttons.exclude,
-      buttons.matchCase,
-      buttons.wholeWord,
-      buttons.regex,
-      buttons.fuzzy,
+      grouping: {
+        iconPath: new vscode.ThemeIcon('list-tree'),
+        tooltip: `${t('结果分组', 'Grouping')}: ${getTextSearchGroupingLabel()}`,
+        location: vscode.QuickInputButtonLocation.Inline,
+      },
+    });
+
+    let buttons = createButtons();
+    const buttonList = () => [
+      buttons.include, buttons.exclude,
+      buttons.matchCase, buttons.wholeWord, buttons.regex, buttons.fuzzy,
       buttons.grouping,
     ];
+    inputBox.buttons = buttonList();
+
+    const refreshButtons = () => {
+      buttons = createButtons();
+      inputBox.buttons = buttonList();
+    };
+
+    const handleToggle = (button: vscode.QuickInputButton) => {
+      if (button === buttons.fuzzy) {
+        textSearchDraftRequest = {
+          ...textSearchDraftRequest,
+          fuzzySearch: !textSearchDraftRequest.fuzzySearch,
+          useRegExp: !textSearchDraftRequest.fuzzySearch ? false : textSearchDraftRequest.useRegExp,
+          matchWholeWord: !textSearchDraftRequest.fuzzySearch ? false : textSearchDraftRequest.matchWholeWord,
+        };
+      } else if (button === buttons.regex) {
+        textSearchDraftRequest = {
+          ...textSearchDraftRequest,
+          useRegExp: !textSearchDraftRequest.useRegExp,
+          fuzzySearch: !textSearchDraftRequest.useRegExp ? false : textSearchDraftRequest.fuzzySearch,
+        };
+      } else if (button === buttons.matchCase) {
+        textSearchDraftRequest = { ...textSearchDraftRequest, matchCase: !textSearchDraftRequest.matchCase };
+      } else if (button === buttons.wholeWord) {
+        if (textSearchDraftRequest.fuzzySearch) {
+          void vscode.window.showWarningMessage(t('模糊搜索不支持整词匹配，请先关闭模糊搜索。', 'Fuzzy search does not support whole-word matching. Turn off fuzzy search first.'));
+          refreshButtons();
+          return;
+        }
+        textSearchDraftRequest = { ...textSearchDraftRequest, matchWholeWord: !textSearchDraftRequest.matchWholeWord };
+      }
+      updateTextSearchOptionContexts();
+      refreshButtons();
+      const existingQuery = textSearchProvider.getSearchRequest()?.query?.trim();
+      if (existingQuery) {
+        void runTextSearch({ ...textSearchDraftRequest, query: existingQuery });
+      }
+    };
 
     return await new Promise(resolve => {
       let settled = false;
+      const state: ActiveTextSearchInputState = {
+        inputBox,
+        historyIndex: -1,
+        draftValue: initialValue,
+      };
+      setActiveTextSearchInputState(state);
+
       const finish = (result: { kind: string; query: string } | undefined) => {
         if (settled) return;
         settled = true;
         disposables.forEach(disposable => disposable.dispose());
-        input.hide();
+        if (activeTextSearchInputState?.inputBox === inputBox) {
+          setActiveTextSearchInputState(undefined);
+        }
+        inputBox.hide();
+        inputBox.dispose();
         resolve(result);
       };
       const disposables: vscode.Disposable[] = [
-        input.onDidAccept(() => finish({ kind: 'submit', query: input.value })),
-        input.onDidTriggerButton(button => {
-          const query = input.value;
+        inputBox.onDidChangeValue(value => {
+          state.historyIndex = -1;
+          state.draftValue = value;
+        }),
+        inputBox.onDidAccept(() => finish({ kind: 'submit', query: inputBox.value })),
+        inputBox.onDidTriggerButton(button => {
+          if (button === buttons.matchCase || button === buttons.wholeWord
+              || button === buttons.regex || button === buttons.fuzzy) {
+            handleToggle(button);
+            return;
+          }
+          const query = inputBox.value;
           if (button === buttons.include) finish({ kind: 'include', query });
           else if (button === buttons.exclude) finish({ kind: 'exclude', query });
-          else if (button === buttons.matchCase) finish({ kind: 'matchCase', query });
-          else if (button === buttons.wholeWord) finish({ kind: 'wholeWord', query });
-          else if (button === buttons.regex) finish({ kind: 'regex', query });
-          else if (button === buttons.fuzzy) finish({ kind: 'fuzzy', query });
           else if (button === buttons.grouping) finish({ kind: 'grouping', query });
         }),
-        input.onDidHide(() => finish(undefined)),
+        inputBox.onDidHide(() => finish(undefined)),
       ];
-      input.show();
+      inputBox.show();
     });
   };
 
@@ -1213,31 +1404,15 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!result) return;
         seedQuery = result.query;
         if (result.kind === 'include') {
-          await setTextSearchInclude(seedQuery);
+          await setTextSearchInclude();
           continue;
         }
         if (result.kind === 'exclude') {
-          await setTextSearchExclude(seedQuery);
-          continue;
-        }
-        if (result.kind === 'matchCase') {
-          await toggleTextSearchMatchCase(seedQuery);
-          continue;
-        }
-        if (result.kind === 'wholeWord') {
-          await toggleTextSearchWholeWord(seedQuery);
-          continue;
-        }
-        if (result.kind === 'regex') {
-          await toggleTextSearchRegex(seedQuery);
-          continue;
-        }
-        if (result.kind === 'fuzzy') {
-          await toggleTextSearchFuzzy(seedQuery);
+          await setTextSearchExclude();
           continue;
         }
         if (result.kind === 'grouping') {
-          await setTextSearchGrouping(seedQuery);
+          await setTextSearchGrouping();
           continue;
         }
         const query = result.query;
@@ -1249,9 +1424,30 @@ export function activate(context: vscode.ExtensionContext): void {
           await focusTextSearchView();
           return;
         }
-        await runTextSearch(request);
+        const applied = await runTextSearch(request);
+        if (applied) {
+          await appendTextSearchHistory(query);
+        }
         return;
       }
+    },
+  );
+  const searchTextFromSelectionCmd = vscode.commands.registerCommand(
+    'smartReferences.searchTextFromSelection',
+    async () => {
+      await vscode.commands.executeCommand('smartReferences.searchText');
+    },
+  );
+  const previousTextSearchHistoryCmd = vscode.commands.registerCommand(
+    'smartReferences.previousTextSearchHistory',
+    () => {
+      applyTextSearchHistory('previous');
+    },
+  );
+  const nextTextSearchHistoryCmd = vscode.commands.registerCommand(
+    'smartReferences.nextTextSearchHistory',
+    () => {
+      applyTextSearchHistory('next');
     },
   );
   const refreshTextSearchCmd = vscode.commands.registerCommand(
@@ -1275,21 +1471,9 @@ export function activate(context: vscode.ExtensionContext): void {
       await toggleTextSearchMatchCase();
     },
   );
-  const toggleTextSearchMatchCaseActiveCmd = vscode.commands.registerCommand(
-    'smartReferences.toggleTextSearchMatchCaseActive',
-    async () => {
-      await toggleTextSearchMatchCase();
-    },
-  );
 
   const toggleTextSearchWholeWordCmd = vscode.commands.registerCommand(
     'smartReferences.toggleTextSearchWholeWord',
-    async () => {
-      await toggleTextSearchWholeWord();
-    },
-  );
-  const toggleTextSearchWholeWordActiveCmd = vscode.commands.registerCommand(
-    'smartReferences.toggleTextSearchWholeWordActive',
     async () => {
       await toggleTextSearchWholeWord();
     },
@@ -1301,21 +1485,9 @@ export function activate(context: vscode.ExtensionContext): void {
       await toggleTextSearchRegex();
     },
   );
-  const toggleTextSearchRegexActiveCmd = vscode.commands.registerCommand(
-    'smartReferences.toggleTextSearchRegexActive',
-    async () => {
-      await toggleTextSearchRegex();
-    },
-  );
 
   const setTextSearchIncludeCmd = vscode.commands.registerCommand(
     'smartReferences.setTextSearchInclude',
-    async () => {
-      await setTextSearchInclude();
-    },
-  );
-  const setTextSearchIncludeActiveCmd = vscode.commands.registerCommand(
-    'smartReferences.setTextSearchIncludeActive',
     async () => {
       await setTextSearchInclude();
     },
@@ -1327,21 +1499,9 @@ export function activate(context: vscode.ExtensionContext): void {
       await setTextSearchExclude();
     },
   );
-  const setTextSearchExcludeActiveCmd = vscode.commands.registerCommand(
-    'smartReferences.setTextSearchExcludeActive',
-    async () => {
-      await setTextSearchExclude();
-    },
-  );
 
   const toggleTextSearchFuzzyCmd = vscode.commands.registerCommand(
     'smartReferences.toggleTextSearchFuzzy',
-    async () => {
-      await toggleTextSearchFuzzy();
-    },
-  );
-  const toggleTextSearchFuzzyActiveCmd = vscode.commands.registerCommand(
-    'smartReferences.toggleTextSearchFuzzyActive',
     async () => {
       await toggleTextSearchFuzzy();
     },
@@ -1507,7 +1667,47 @@ export function activate(context: vscode.ExtensionContext): void {
     'smartReferences.toggleProjectViewMode',
     async () => {
       await vscode.commands.executeCommand('projectExplorer.focus');
-      projectExplorer.toggleViewMode();
+      const modeLabels: Record<ProjectViewMode, { label: string; description: string }> = {
+        'merged': {
+          label: t('合并目录树', 'Merged Tree'),
+          description: t('所有已跟踪文件共用一棵目录树。', 'All tracked files in one directory tree.'),
+        },
+        'categorized': {
+          label: t('源码 / 测试', 'Sources / Tests'),
+          description: t('按源码和测试拆分。', 'Split tracked files into sources and tests.'),
+        },
+        'cpp-project': {
+          label: t('工程分组', 'Project Layout'),
+          description: t('按模块、头文件、测试、工程文件、第三方依赖分组；多项目工作区会先按项目名分层。生成文件并入模块或头文件，并以 ignored 风格弱化显示。专用测试目录不弱化。', 'Group by modules, headers, tests, build files, and third-party code. Multi-project workspaces add a project-name layer first. Generated files stay under modules or headers and use ignored-style dimming. Dedicated test directories stay normal.'),
+        },
+        'hotspot': {
+          label: t('热点文件', 'Hotspot Files'),
+          description: t('按本次会话中引用查询命中频率排序，命中越多排越前。', 'Files sorted by how often they appeared in reference query results this session.'),
+        },
+      };
+      const currentMode = projectExplorer.getCurrentViewMode();
+      const picked = await vscode.window.showQuickPick(
+        projectExplorer.getAvailableViewModes().map(mode => ({
+          label: modeLabels[mode].label,
+          description: modeLabels[mode].description,
+          detail: mode === currentMode ? t('当前模式', 'Current mode') : undefined,
+          mode,
+        })),
+        {
+          title: t('项目文件分组模式', 'Project Files Grouping'),
+          placeHolder: t('选择 Project Files 的显示方式', 'Choose how Project Files should be grouped'),
+        },
+      );
+      if (!picked) return;
+      // Refresh after confirmation to avoid wasted work when user cancels.
+      // getAvailableViewModes() uses cached cppProjectDetected which is kept
+      // current by file-watcher-driven scheduleRefresh, so the QuickPick list
+      // shown above is already up-to-date in normal usage.
+      await projectExplorer.refresh(true);
+      projectExplorer.setViewMode(picked.mode);
+      if (picked.mode === 'hotspot') {
+        projectExplorer.updateHitCounts(treeProvider.getFileHitCounts());
+      }
     },
   );
   const setReferenceScopeCmd = vscode.commands.registerCommand(
@@ -1551,6 +1751,33 @@ export function activate(context: vscode.ExtensionContext): void {
       scheduleRevealActiveReference();
     },
   );
+  const exportReferenceResultsCmd = vscode.commands.registerCommand(
+    'smartReferences.exportResults',
+    async () => {
+      const md = treeProvider.formatAsMarkdown();
+      if (!md) {
+        vscode.window.showInformationMessage('No reference results to export.');
+        return;
+      }
+      await vscode.env.clipboard.writeText(md);
+      vscode.window.showInformationMessage('Reference results copied to clipboard as Markdown.');
+    },
+  );
+  const filterReferenceKeywordCmd = vscode.commands.registerCommand(
+    'smartReferences.filterReferenceKeyword',
+    async () => {
+      const current = treeProvider.getKeywordFilter();
+      const keyword = await vscode.window.showInputBox({
+        prompt: 'Filter references by keyword (leave empty to clear)',
+        value: current,
+        placeHolder: 'e.g. error, userId, handleXxx',
+      });
+      if (keyword !== undefined) {
+        treeProvider.setKeywordFilter(keyword);
+        refreshReferenceTitle();
+      }
+    },
+  );
   const pinReferenceResultsCmd = vscode.commands.registerCommand(
     'smartReferences.pinReferenceResults',
     () => {
@@ -1570,12 +1797,19 @@ export function activate(context: vscode.ExtensionContext): void {
         iconPath: new vscode.ThemeIcon('trash'),
         tooltip: 'Remove pinned result',
       };
+      const editNoteButton: vscode.QuickInputButton = {
+        iconPath: new vscode.ThemeIcon('edit'),
+        tooltip: 'Edit note',
+      };
       const buildItems = (): (vscode.QuickPickItem & { entry: PinnedReferenceResult })[] =>
         treeProvider.getPinnedResults().map(entry => ({
           label: entry.symbolName || '(anonymous symbol)',
           description: `${entry.refs.length} usages`,
-          detail: `${new Date(entry.pinnedAt).toLocaleString()} · ${entry.scopeFilter} · ${entry.groupingMode}`,
-          buttons: [removeButton],
+          detail: [
+            `${new Date(entry.pinnedAt).toLocaleString()} · ${entry.scopeFilter} · ${entry.groupingMode}`,
+            entry.note ? `📝 ${entry.note}` : undefined,
+          ].filter(Boolean).join('  '),
+          buttons: [editNoteButton, removeButton],
           entry,
         }));
 
@@ -1591,7 +1825,22 @@ export function activate(context: vscode.ExtensionContext): void {
       quickPick.matchOnDetail = true;
       quickPick.items = buildItems();
 
-      quickPick.onDidTriggerItemButton(e => {
+      quickPick.onDidTriggerItemButton(async e => {
+        if (e.button === editNoteButton) {
+          quickPick.hide();
+          const current = e.item.entry.note ?? '';
+          const note = await vscode.window.showInputBox({
+            prompt: `Note for "${e.item.entry.symbolName}"`,
+            value: current,
+            placeHolder: 'Add a note (leave empty to clear)',
+          });
+          if (note !== undefined) {
+            treeProvider.setPinnedNote(e.item.entry.id, note);
+          }
+          // Reopen the quickpick with updated items
+          void vscode.commands.executeCommand('smartReferences.openPinnedReferenceResults');
+          return;
+        }
         treeProvider.removePinnedResult(e.item.entry.id);
         quickPick.items = buildItems();
         if (quickPick.items.length === 0) {
@@ -1750,6 +1999,9 @@ export function activate(context: vscode.ExtensionContext): void {
       lensProvider.refresh();
       projectExplorer.scheduleRefresh();
     }
+    if (e.affectsConfiguration('smartReferences.textSearch.historySize')) {
+      void refreshTextSearchHistoryFromConfig();
+    }
     if (!textSearchProvider.getQuery()) {
       textSearchDraftRequest = textSearchProvider.getEditableRequest();
     }
@@ -1776,6 +2028,7 @@ export function activate(context: vscode.ExtensionContext): void {
     structureView,
     treeVisibilityListener,
     projectExplorerVisibilityListener,
+    projectExplorerStateListener,
     structureVisibilityListener,
     editorChangeListener,
     docChangeListener,
@@ -1826,20 +2079,17 @@ export function activate(context: vscode.ExtensionContext): void {
     searchFunctionCmd,
     searchTypeCmd,
     searchTextCmd,
+    searchTextFromSelectionCmd,
+    previousTextSearchHistoryCmd,
+    nextTextSearchHistoryCmd,
     refreshTextSearchCmd,
     configureTextSearchCmd,
     toggleTextSearchMatchCaseCmd,
-    toggleTextSearchMatchCaseActiveCmd,
     toggleTextSearchWholeWordCmd,
-    toggleTextSearchWholeWordActiveCmd,
     toggleTextSearchRegexCmd,
-    toggleTextSearchRegexActiveCmd,
     setTextSearchIncludeCmd,
-    setTextSearchIncludeActiveCmd,
     setTextSearchExcludeCmd,
-    setTextSearchExcludeActiveCmd,
     toggleTextSearchFuzzyCmd,
-    toggleTextSearchFuzzyActiveCmd,
     setTextSearchGroupingCmd,
     replaceAllTextSearchResultsCmd,
     undoLastTextSearchReplaceCmd,
@@ -1857,6 +2107,8 @@ export function activate(context: vscode.ExtensionContext): void {
     toggleProjectViewCmd,
     setReferenceScopeCmd,
     setReferenceGroupingCmd,
+    exportReferenceResultsCmd,
+    filterReferenceKeywordCmd,
     pinReferenceResultsCmd,
     openPinnedReferenceResultsCmd,
     revealInOSCmd,
@@ -1881,6 +2133,21 @@ export function activate(context: vscode.ExtensionContext): void {
       if (refRevealTimer) clearTimeout(refRevealTimer);
     }),
   );
+
+  return {
+    async refreshProjectExplorer(force = true) {
+      await projectExplorer.refresh(force);
+    },
+    getProjectExplorerState() {
+      return {
+        currentViewMode: projectExplorer.getCurrentViewMode(),
+        availableViewModes: projectExplorer.getAvailableViewModes(),
+      };
+    },
+    async setProjectExplorerViewMode(mode: ProjectViewMode) {
+      projectExplorer.setViewMode(mode);
+    },
+  };
 }
 
 export function deactivate(): void {

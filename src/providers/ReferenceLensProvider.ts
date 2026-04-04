@@ -59,13 +59,17 @@ export class ReferenceLensProvider implements vscode.CodeLensProvider {
       );
       const count = Array.isArray(refs) ? refs.length : 0;
       if (count === 0) {
-        lens.command.title = '$(references) 0 references';
+        lens.command.title = '$(circle-slash) no references';
       } else {
         const testCount = Array.isArray(refs)
           ? refs.filter(r => this.testDetector.isTestFile(r.uri)).length
           : 0;
         const parts: string[] = [`${count} reference${count !== 1 ? 's' : ''}`];
-        if (testCount > 0) parts.push(`${testCount} test${testCount !== 1 ? 's' : ''}`);
+        if (testCount > 0) {
+          parts.push(`${testCount} test${testCount !== 1 ? 's' : ''}`);
+        } else {
+          parts.push('no tests');
+        }
         lens.command.title = `$(references) ${parts.join(' · ')}`;
       }
     } catch {

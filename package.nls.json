@@ -1,6 +1,11 @@
 {
   "viewContainer.smartReferences.title": "IntelliJ-Style References",
+  "command.findReferences.title": "Find Smart References",
+  "command.showTypeHierarchy.title": "Find Implementations",
+  "command.showStructure.title": "Show File Structure",
+  "command.changeProjectViewMode.title": "Change Project File Grouping",
   "command.searchText.title": "Enhanced Search",
+  "command.searchTextFromSelection.title": "Search with Enhanced Search",
   "command.refreshTextSearch.title": "Refresh Enhanced Search",
   "command.setTextSearchGrouping.title": "Change Enhanced Search Grouping",
   "command.configureTextSearch.title": "Configure Enhanced Search",
@@ -21,8 +26,11 @@
   "config.textSearch.includeGlobs.description": "Additional include glob rules for Enhanced Search. Empty means no extra restriction.",
   "config.textSearch.excludeGlobs.description": "Additional exclude glob rules for Enhanced Search. These are merged with VS Code search.exclude and files.exclude.",
   "config.textSearch.fuzzySearch.description": "Enable fuzzy subsequence matching for Enhanced Search. Disabled by default.",
+  "config.textSearch.historySize.description": "Number of recent Enhanced Search queries kept in history. Search input supports browsing this history with Up/Down or the mouse wheel.",
   "config.textSearch.groupCodeAndComments.description": "Group Enhanced Search results by code matches and comment matches.",
   "config.textSearch.groupConfigAndCodeFiles.description": "Group Enhanced Search results by config files and code files.",
   "config.textSearch.maxFuzzyFileScan.description": "Maximum number of files scanned in fuzzy search mode.",
-  "config.textSearch.maxFuzzyMatches.description": "Maximum number of matches collected in fuzzy search mode."
+  "config.textSearch.maxFuzzyMatches.description": "Maximum number of matches collected in fuzzy search mode.",
+  "viewContainer.projectPanel.title": "Project Files",
+  "view.projectExplorer.name": "Project Files"
 }
