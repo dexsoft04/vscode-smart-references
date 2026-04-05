@@ -597,6 +597,11 @@
           "name": "References"
         },
         {
+          "id": "codePreviewView",
+          "name": "%view.codePreview.name%",
+          "type": "webview"
+        },
+        {
           "id": "typeHierarchyTree",
           "name": "Implementations"
         },

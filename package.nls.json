@@ -32,6 +32,7 @@
   "config.textSearch.groupConfigAndCodeFiles.description": "Group Enhanced Search results by config files and code files.",
   "config.textSearch.maxFuzzyFileScan.description": "Maximum number of files scanned in fuzzy search mode.",
   "config.textSearch.maxFuzzyMatches.description": "Maximum number of matches collected in fuzzy search mode.",
+  "view.codePreview.name": "Preview",
   "viewContainer.projectPanel.title": "Project Files",
   "view.projectExplorer.name": "Project Files"
 }

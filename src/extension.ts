@@ -34,6 +34,7 @@ import { TranslationManager } from './providers/TranslationManager';
 import { ProtoWorkspaceNavigator } from './core/ProtoWorkspaceNavigator';
 import { ProtoSymbolNavigationProvider } from './providers/ProtoSymbolNavigationProvider';
 import { DEFAULT_TEXT_SEARCH_HISTORY_LIMIT, normalizeTextSearchHistoryLimit, pushTextSearchHistory, sanitizeTextSearchHistory } from './core/TextSearchHistory';
+import { CodePreviewViewProvider } from './providers/CodePreviewViewProvider';
 import { t } from './i18n';
 
 export interface SmartReferencesExtensionApi {
@@ -74,6 +75,7 @@ export function activate(context: vscode.ExtensionContext): SmartReferencesExten
   );
   const lensProvider = new ReferenceLensProvider(testDetector);
   const previewer = new ReferencePreviewManager();
+  const codePreviewProvider = new CodePreviewViewProvider();
   const textSearchProvider = new TextSearchTreeProvider();
   const getTextSearchHistoryLimit = (): number => normalizeTextSearchHistoryLimit(
     vscode.workspace.getConfiguration('smartReferences').get<number>('textSearch.historySize', DEFAULT_TEXT_SEARCH_HISTORY_LIMIT),
@@ -423,10 +425,28 @@ export function activate(context: vscode.ExtensionContext): SmartReferencesExten
   );
 
   // Preview command: open file on the right, highlight reference line
+  const codePreviewRegistration = vscode.window.registerWebviewViewProvider(
+    CodePreviewViewProvider.viewType,
+    codePreviewProvider,
+  );
+  let lastPreviewClick: { uri: string; line: number; time: number } | undefined;
   const previewCmd = vscode.commands.registerCommand(
     'smartReferences.previewReference',
     async (uri: vscode.Uri, range: vscode.Range) => {
-      await previewer.preview(uri, range);
+      const now = Date.now();
+      const key = uri.toString();
+      const line = range.start.line;
+      const isDoubleClick = lastPreviewClick
+        && lastPreviewClick.uri === key
+        && lastPreviewClick.line === line
+        && (now - lastPreviewClick.time) < 300;
+      lastPreviewClick = { uri: key, line, time: now };
+
+      if (isDoubleClick) {
+        await previewer.preview(uri, range);
+      } else {
+        await codePreviewProvider.updatePreview(uri, range);
+      }
     },
   );
 
@@ -2160,6 +2180,8 @@ export function activate(context: vscode.ExtensionContext): SmartReferencesExten
     implHints,
     findCmd,
     previewCmd,
+    codePreviewProvider,
+    codePreviewRegistration,
     findAtCmd,
     hierarchyCmd,
     goToImplCmd,
