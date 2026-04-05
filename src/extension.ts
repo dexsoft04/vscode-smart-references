@@ -6,7 +6,7 @@ import { ReferenceClassifier } from './core/ReferenceClassifier';
 import { ReferenceCache } from './core/Cache';
 import { TestFileDetector } from './analyzers/TestFileDetector';
 import { ReferencePreviewManager } from './providers/ReferencePreviewManager';
-import { TextSearchTreeProvider, TextSearchGroupingMode, TextSearchRequest, TextSearchReplaceTarget } from './providers/TextSearchTreeProvider';
+import { TextSearchTreeProvider, TextSearchGroupingMode, TextSearchRequest, TextSearchReplaceTarget, rgSourceLabel } from './providers/TextSearchTreeProvider';
 import { TypeHierarchyTreeProvider } from './providers/TypeHierarchyTreeProvider';
 import { CategoryDecorationProvider } from './providers/CategoryDecorationProvider';
 import { SymbolSearchProvider } from './providers/SymbolSearchProvider';
@@ -575,6 +575,13 @@ export function activate(context: vscode.ExtensionContext): SmartReferencesExten
     const message = String(err);
     return message === 'Error: Text search cancelled' || message === 'Text search cancelled';
   };
+  const showTextSearchError = (message: string): void => {
+    if (message.includes('ENOENT')) {
+      vscode.window.showErrorMessage(t('搜索增强内置的 ripgrep 无法启动。', 'Search Enhancement bundled ripgrep failed to start.'));
+    } else {
+      vscode.window.showErrorMessage(`${t('搜索增强错误', 'Search Enhancement Error')}: ${message}`);
+    }
+  };
   let textSearchDraftRequest: TextSearchRequest = textSearchProvider.getEditableRequest();
 
   interface ReplacementFileContext {
@@ -770,29 +777,58 @@ export function activate(context: vscode.ExtensionContext): SmartReferencesExten
     return contextForFile;
   };
 
+  outputChannel.appendLine(`[text-search] ripgrep source=${rgSourceLabel}`);
+
+  let activeSearchCts: vscode.CancellationTokenSource | undefined;
   const runTextSearch = async (request: TextSearchRequest): Promise<boolean> => {
+    if (activeSearchCts) {
+      outputChannel.appendLine('[text-search] cancelling previous search');
+      activeSearchCts.cancel();
+      activeSearchCts.dispose();
+    }
+    const cts = new vscode.CancellationTokenSource();
+    activeSearchCts = cts;
+    const opts: string[] = [];
+    if (request.matchCase) opts.push('case');
+    if (request.matchWholeWord) opts.push('word');
+    if (request.useRegExp) opts.push('regex');
+    if (request.fuzzySearch) opts.push('fuzzy');
+    if (request.include) opts.push(`in:${request.include}`);
+    if (request.exclude) opts.push(`out:${request.exclude}`);
+    outputChannel.appendLine(`[text-search] start query=${JSON.stringify(request.query)}${opts.length ? ` [${opts.join(', ')}]` : ''}`);
+    const startTime = Date.now();
     await focusTextSearchView();
     return await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: t('搜索增强', 'Search Enhancement'), cancellable: true },
-      async (_progress, token) => {
+      async (_progress, progressToken) => {
+        const onProgressCancel = progressToken.onCancellationRequested(() => cts.cancel());
         try {
-          const applied = await textSearchProvider.search(request, token);
+          const applied = await textSearchProvider.search(request, cts.token);
+          const elapsed = Date.now() - startTime;
           if (applied) {
+            outputChannel.appendLine(`[text-search] done ${elapsed}ms matches=${textSearchProvider.getMatchCount()} files=${textSearchProvider.getFileCount()}`);
             textSearchDraftRequest = { ...request };
             updateTextSearchOptionContexts();
             textSearchView.description = textSearchProvider.getTitle();
             showTextSearchWarning();
+          } else {
+            outputChannel.appendLine(`[text-search] skipped ${elapsed}ms (cancelled or superseded)`);
           }
           return applied;
         } catch (err) {
-          if (isTextSearchCancelled(err)) return false;
-          const message = String(err);
-          if (message.includes('ENOENT')) {
-            vscode.window.showErrorMessage(t('搜索增强需要系统 PATH 中可用的 ripgrep (`rg`)。', 'Search Enhancement requires ripgrep (`rg`) to be available in the system PATH.'));
-          } else {
-            vscode.window.showErrorMessage(`${t('搜索增强错误', 'Search Enhancement Error')}: ${message}`);
+          const elapsed = Date.now() - startTime;
+          if (isTextSearchCancelled(err)) {
+            outputChannel.appendLine(`[text-search] cancelled ${elapsed}ms`);
+            return false;
           }
+          const message = String(err);
+          outputChannel.appendLine(`[text-search] error ${elapsed}ms ${message}`);
+          showTextSearchError(message);
           return false;
+        } finally {
+          onProgressCancel.dispose();
+          if (activeSearchCts === cts) activeSearchCts = undefined;
+          cts.dispose();
         }
       },
     );
@@ -859,12 +895,7 @@ export function activate(context: vscode.ExtensionContext): SmartReferencesExten
       }
     } catch (err) {
       if (isTextSearchCancelled(err)) return;
-      const message = String(err);
-      if (message.includes('ENOENT')) {
-        vscode.window.showErrorMessage(t('搜索增强需要系统 PATH 中可用的 ripgrep (`rg`)。', 'Search Enhancement requires ripgrep (`rg`) to be available in the system PATH.'));
-      } else {
-        vscode.window.showErrorMessage(`${t('搜索增强错误', 'Search Enhancement Error')}: ${message}`);
-      }
+      showTextSearchError(String(err));
     }
   };
 
@@ -1145,15 +1176,21 @@ export function activate(context: vscode.ExtensionContext): SmartReferencesExten
     };
 
     const applyOptionChange = () => {
-      updateTextSearchOptionContexts();
       refreshButtons();
       const existingQuery = textSearchProvider.getSearchRequest()?.query?.trim();
       if (existingQuery) {
         void runTextSearch({ ...textSearchDraftRequest, query: existingQuery });
+      } else {
+        updateTextSearchOptionContexts();
       }
     };
 
     const handleToggle = (button: vscode.QuickInputButton) => {
+      const name = button === buttons.matchCase ? 'matchCase'
+        : button === buttons.wholeWord ? 'wholeWord'
+        : button === buttons.regex ? 'regex'
+        : 'fuzzy';
+      outputChannel.appendLine(`[text-search] toggle ${name}`);
       if (button === buttons.fuzzy) {
         textSearchDraftRequest = {
           ...textSearchDraftRequest,
@@ -1182,8 +1219,8 @@ export function activate(context: vscode.ExtensionContext): SmartReferencesExten
 
     const handleFilterInput = async (button: vscode.QuickInputButton) => {
       const isInclude = button === buttons.include;
+      const filterName = isInclude ? 'include' : 'exclude';
       const currentValue = isInclude ? textSearchDraftRequest.include : textSearchDraftRequest.exclude;
-      inputBox.hide();
       const glob = await vscode.window.showInputBox({
         prompt: isInclude
           ? t('包含文件 Glob，留空表示不限制', 'Include file glob. Leave empty for no extra limit.')
@@ -1193,13 +1230,13 @@ export function activate(context: vscode.ExtensionContext): SmartReferencesExten
       });
       if (glob !== undefined) {
         const value = glob.trim();
+        outputChannel.appendLine(`[text-search] set ${filterName}=${JSON.stringify(value)}`);
         textSearchDraftRequest = isInclude
           ? { ...textSearchDraftRequest, include: value }
           : { ...textSearchDraftRequest, exclude: value };
         applyOptionChange();
       }
       refreshButtons();
-      inputBox.show();
     };
 
     const handleGrouping = async () => {
@@ -1209,12 +1246,12 @@ export function activate(context: vscode.ExtensionContext): SmartReferencesExten
         { label: t('代码 / 配置文件', 'Code / Config Files'), description: t('区分代码文件和配置文件', 'Separate code files and config files'), mode: 'fileKind' },
         { label: t('组合分组', 'Combined Grouping'), description: t('同时按内容和文件类型分组', 'Group by content and file type together'), mode: 'both' },
       ];
-      inputBox.hide();
       const pick = await vscode.window.showQuickPick(items, {
         placeHolder: t('选择搜索结果分组方式', 'Choose result grouping mode'),
         ignoreFocusOut: true,
       });
       if (pick) {
+        outputChannel.appendLine(`[text-search] set grouping=${pick.mode}`);
         textSearchProvider.setGroupingMode(pick.mode);
         const existingQuery = textSearchProvider.getSearchRequest()?.query?.trim();
         if (existingQuery) {
@@ -1222,11 +1259,11 @@ export function activate(context: vscode.ExtensionContext): SmartReferencesExten
         }
       }
       refreshButtons();
-      inputBox.show();
     };
 
     return await new Promise(resolve => {
       let settled = false;
+      let suppressHide = false;
       const state: ActiveTextSearchInputState = {
         inputBox,
         historyIndex: -1,
@@ -1245,6 +1282,14 @@ export function activate(context: vscode.ExtensionContext): SmartReferencesExten
         inputBox.dispose();
         resolve(result);
       };
+
+      const runSubDialog = async (fn: () => Promise<void>) => {
+        suppressHide = true;
+        inputBox.hide();
+        try { await fn(); } finally { suppressHide = false; }
+        if (!settled) inputBox.show();
+      };
+
       const disposables: vscode.Disposable[] = [
         inputBox.onDidChangeValue(value => {
           state.historyIndex = -1;
@@ -1256,12 +1301,12 @@ export function activate(context: vscode.ExtensionContext): SmartReferencesExten
               || button === buttons.regex || button === buttons.fuzzy) {
             handleToggle(button);
           } else if (button === buttons.include || button === buttons.exclude) {
-            void handleFilterInput(button);
+            void runSubDialog(() => handleFilterInput(button));
           } else if (button === buttons.grouping) {
-            void handleGrouping();
+            void runSubDialog(() => handleGrouping());
           }
         }),
-        inputBox.onDidHide(() => finish(undefined)),
+        inputBox.onDidHide(() => { if (!suppressHide) finish(undefined); }),
       ];
       inputBox.show();
     });
@@ -1446,6 +1491,25 @@ export function activate(context: vscode.ExtensionContext): SmartReferencesExten
     'smartReferences.searchType',
     () => symbolSearch.show([SymbolCategory.Class, SymbolCategory.Interface, SymbolCategory.Enum]),
   );
+  const submitTextSearchQuery = async (seedQuery: string): Promise<void> => {
+    const result = await promptTextSearchQuery(seedQuery);
+    if (!result) return;
+    const query = result.query;
+    const request = { ...textSearchDraftRequest, query };
+    if (!query.trim()) {
+      textSearchProvider.clear();
+      textSearchDraftRequest = { ...request, query: '' };
+      updateTextSearchOptionContexts();
+      textSearchView.description = '';
+      await focusTextSearchView();
+      return;
+    }
+    const applied = await runTextSearch(request);
+    if (applied) {
+      await appendTextSearchHistory(query);
+    }
+  };
+
   const searchTextCmd = vscode.commands.registerCommand(
     'smartReferences.searchText',
     async () => {
@@ -1454,22 +1518,7 @@ export function activate(context: vscode.ExtensionContext): SmartReferencesExten
         ? editor.document.getText(editor.selection).trim()
         : undefined;
       const seedQuery = selectedText || textSearchProvider.getSearchRequest()?.query || textSearchDraftRequest.query;
-      const result = await promptTextSearchQuery(seedQuery);
-      if (!result) return;
-      const query = result.query;
-      const request = { ...textSearchDraftRequest, query };
-      if (!query.trim()) {
-        textSearchProvider.clear();
-        textSearchDraftRequest = { ...request, query: '' };
-        updateTextSearchOptionContexts();
-        textSearchView.description = '';
-        await focusTextSearchView();
-        return;
-      }
-      const applied = await runTextSearch(request);
-      if (applied) {
-        await appendTextSearchHistory(query);
-      }
+      await submitTextSearchQuery(seedQuery);
     },
   );
   const searchTextFromSelectionCmd = vscode.commands.registerCommand(
@@ -1482,22 +1531,7 @@ export function activate(context: vscode.ExtensionContext): SmartReferencesExten
     'smartReferences.editTextSearch',
     async () => {
       const seedQuery = textSearchProvider.getSearchRequest()?.query || textSearchDraftRequest.query;
-      const result = await promptTextSearchQuery(seedQuery);
-      if (!result) return;
-      const query = result.query;
-      const request = { ...textSearchDraftRequest, query };
-      if (!query.trim()) {
-        textSearchProvider.clear();
-        textSearchDraftRequest = { ...request, query: '' };
-        updateTextSearchOptionContexts();
-        textSearchView.description = '';
-        await focusTextSearchView();
-        return;
-      }
-      const applied = await runTextSearch(request);
-      if (applied) {
-        await appendTextSearchHistory(query);
-      }
+      await submitTextSearchQuery(seedQuery);
     },
   );
   const previousTextSearchHistoryCmd = vscode.commands.registerCommand(

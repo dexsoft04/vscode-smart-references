@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { spawn } from 'child_process';
+import { spawn, execFile } from 'child_process';
+import { rgPath as bundledRgPath } from '@vscode/ripgrep';
 import { isStructuredTextLanguage } from '../core/StructuredTextParser';
 import { t } from '../i18n';
 
@@ -556,9 +557,24 @@ function applySearchModeFlags(args: string[], query: string, options: TextSearch
   args.push('--ignore-case');
 }
 
+let resolvedRgPath: string | undefined;
+export let rgSourceLabel = 'pending';
+
+const resolveRgPath = new Promise<string>(resolve => {
+  execFile('rg', ['--version'], (err) => {
+    resolvedRgPath = err ? bundledRgPath : 'rg';
+    rgSourceLabel = resolvedRgPath === 'rg' ? 'system' : 'bundled';
+    resolve(resolvedRgPath);
+  });
+});
+
+function getRgPath(): string {
+  return resolvedRgPath ?? bundledRgPath;
+}
+
 async function runRgCommand(args: string[], token?: vscode.CancellationToken): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
-    const child = spawn('rg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(getRgPath(), args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -1260,6 +1276,14 @@ export class TextSearchTreeProvider implements vscode.TreeDataProvider<SearchNod
 
   hasResults(): boolean {
     return this.matches.length > 0;
+  }
+
+  getMatchCount(): number {
+    return this.matches.length;
+  }
+
+  getFileCount(): number {
+    return new Set(this.matches.map(m => m.uri.toString())).size;
   }
 
   getQuery(): string {
