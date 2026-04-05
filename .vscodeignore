@@ -2,5 +2,7 @@
 src/**
 node_modules/**
 !node_modules/@vscode/ripgrep/**
+!node_modules/shiki/**
+!node_modules/@shikijs/**
 tsconfig.json
 **/*.map

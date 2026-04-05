@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import type { HighlighterCore, BundledLanguage, BundledTheme } from 'shiki';
 
 export class CodePreviewViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   public static readonly viewType = 'codePreviewView';
@@ -8,9 +9,31 @@ export class CodePreviewViewProvider implements vscode.WebviewViewProvider, vsco
   private _currentUri?: vscode.Uri;
   private _currentRange?: vscode.Range;
   private _debounceTimer?: ReturnType<typeof setTimeout>;
+  private _highlighter?: HighlighterCore;
+  private _highlighterPromise?: Promise<HighlighterCore>;
+  private _disposables: vscode.Disposable[] = [];
+  private _log: vscode.OutputChannel;
 
   private static readonly CONTEXT_LINES = 15;
   private static readonly DEBOUNCE_MS = 100;
+
+  private static readonly THEME_MAP: Record<number, BundledTheme> = {
+    [vscode.ColorThemeKind.Light]: 'github-light',
+    [vscode.ColorThemeKind.Dark]: 'github-dark',
+    [vscode.ColorThemeKind.HighContrast]: 'github-dark',
+    [vscode.ColorThemeKind.HighContrastLight]: 'github-light',
+  };
+
+  private static readonly LANG_ALIASES: Record<string, string> = {
+    typescriptreact: 'tsx',
+    javascriptreact: 'jsx',
+    shellscript: 'bash',
+    dockercompose: 'yaml',
+  };
+
+  constructor(log: vscode.OutputChannel) {
+    this._log = log;
+  }
 
   resolveWebviewView(
     webviewView: vscode.WebviewView,
@@ -32,6 +55,14 @@ export class CodePreviewViewProvider implements vscode.WebviewViewProvider, vsco
       }
     });
 
+    this._disposables.push(
+      vscode.window.onDidChangeActiveColorTheme(() => {
+        if (this._currentUri && this._currentRange) {
+          void this._render(this._currentUri, this._currentRange);
+        }
+      }),
+    );
+
     if (this._currentUri && this._currentRange) {
       void this._render(this._currentUri, this._currentRange);
     } else {
@@ -51,6 +82,33 @@ export class CodePreviewViewProvider implements vscode.WebviewViewProvider, vsco
     }, CodePreviewViewProvider.DEBOUNCE_MS);
   }
 
+  private async _getHighlighter(): Promise<HighlighterCore> {
+    if (this._highlighter) return this._highlighter;
+    if (this._highlighterPromise) return this._highlighterPromise;
+
+    this._highlighterPromise = (async () => {
+      const { createHighlighter } = await import('shiki');
+      const hl = await createHighlighter({
+        themes: ['github-dark', 'github-light'],
+        langs: [],
+      });
+      this._highlighter = hl;
+      this._log.appendLine('Shiki highlighter initialized');
+      return hl;
+    })();
+
+    return this._highlighterPromise;
+  }
+
+  private _resolveShikiLang(languageId: string): string {
+    return CodePreviewViewProvider.LANG_ALIASES[languageId] ?? languageId;
+  }
+
+  private _getShikiTheme(): BundledTheme {
+    const kind = vscode.window.activeColorTheme.kind;
+    return CodePreviewViewProvider.THEME_MAP[kind] ?? 'github-dark';
+  }
+
   private async _render(uri: vscode.Uri, range: vscode.Range): Promise<void> {
     if (!this._view) return;
 
@@ -64,6 +122,7 @@ export class CodePreviewViewProvider implements vscode.WebviewViewProvider, vsco
       for (let i = startLine; i <= endLine; i++) {
         lines.push(doc.lineAt(i).text);
       }
+      const code = lines.join('\n');
 
       const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
       const relativePath = workspaceFolder
@@ -73,44 +132,69 @@ export class CodePreviewViewProvider implements vscode.WebviewViewProvider, vsco
       const editorConfig = vscode.workspace.getConfiguration('editor');
       const tabSize = editorConfig.get<number>('tabSize', 4);
 
-      this._view.webview.html = this._codeHtml(
-        relativePath,
-        lines,
-        startLine,
-        targetLine,
-        tabSize,
-      );
+      const lang = this._resolveShikiLang(doc.languageId);
+      const theme = this._getShikiTheme();
+
+      let highlightedLines: string[];
+      try {
+        const hl = await this._getHighlighter();
+        const loadedLangs = hl.getLoadedLanguages();
+        if (!loadedLangs.includes(lang as any)) {
+          try {
+            await hl.loadLanguage(lang as any);
+            this._log.appendLine(`Loaded language: ${lang}`);
+          } catch {
+            this._log.appendLine(`Failed to load language: ${lang}, falling back to plaintext`);
+          }
+        }
+
+        const finalLang = hl.getLoadedLanguages().includes(lang as any) ? lang : 'plaintext';
+
+        const tokens = hl.codeToTokensBase(code, { lang: finalLang, theme });
+        highlightedLines = tokens.map(lineTokens => {
+          const spans = lineTokens.map(t => {
+            const escaped = this._escapeHtml(t.content);
+            if (t.color) {
+              return `<span style="color:${t.color}">${escaped}</span>`;
+            }
+            return escaped;
+          }).join('');
+          return spans || '&nbsp;';
+        });
+      } catch (err) {
+        this._log.appendLine(`Shiki error: ${err}`);
+        highlightedLines = lines.map(l => this._escapeHtml(l) || '&nbsp;');
+      }
+
+      this._view.webview.html = this._buildHtml(relativePath, highlightedLines, startLine, targetLine, tabSize);
     } catch {
       this._view.webview.html = this._errorHtml(uri.fsPath);
     }
   }
 
-  private _codeHtml(
+  private _buildHtml(
     filePath: string,
-    lines: string[],
+    highlightedLines: string[],
     startLine: number,
     targetLine: number,
     tabSize: number,
   ): string {
-    const maxLineNum = startLine + lines.length;
+    const maxLineNum = startLine + highlightedLines.length;
     const gutterWidth = String(maxLineNum).length;
 
-    const rows = lines
-      .map((text, i) => {
-        const lineNum = startLine + i;
-        const isTarget = lineNum === targetLine;
-        const cls = isTarget ? 'line target' : 'line';
-        const escaped = this._escapeHtml(text);
-        const paddedNum = String(lineNum + 1).padStart(gutterWidth);
-        return `<tr class="${cls}" data-line="${lineNum}"><td class="gutter">${paddedNum}</td><td class="code">${escaped || '&nbsp;'}</td></tr>`;
-      })
-      .join('\n');
+    const rows = highlightedLines.map((html, i) => {
+      const lineNum = startLine + i;
+      const isTarget = lineNum === targetLine;
+      const cls = isTarget ? 'line target' : 'line';
+      const paddedNum = String(lineNum + 1).padStart(gutterWidth);
+      return `<tr class="${cls}" data-line="${lineNum}"><td class="gutter">${paddedNum}</td><td class="code">${html}</td></tr>`;
+    }).join('\n');
 
     return /* html */ `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -118,7 +202,7 @@ body {
   color: var(--vscode-editor-foreground);
   font-family: var(--vscode-editor-font-family, Consolas, 'Courier New', monospace);
   font-size: var(--vscode-editor-font-size, 13px);
-  line-height: 1.5;
+  line-height: 1.4;
   tab-size: ${tabSize};
 }
 .header {
@@ -134,10 +218,7 @@ body {
   background: var(--vscode-editor-background);
   z-index: 1;
 }
-.code-container {
-  overflow-x: auto;
-  overflow-y: auto;
-}
+.code-container { overflow: auto; }
 table { border-collapse: collapse; width: 100%; }
 tr.line { cursor: pointer; }
 tr.line:hover td { background: var(--vscode-list-hoverBackground); }
@@ -158,14 +239,6 @@ td.gutter {
 td.code {
   padding: 0 8px 0 0;
   white-space: pre;
-}
-.empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100vh;
-  color: var(--vscode-descriptionForeground);
-  font-size: 12px;
 }
 </style>
 </head>
@@ -212,5 +285,7 @@ body { background: var(--vscode-editor-background); color: var(--vscode-descript
 
   dispose(): void {
     if (this._debounceTimer) clearTimeout(this._debounceTimer);
+    this._highlighter?.dispose();
+    this._disposables.forEach(d => d.dispose());
   }
 }

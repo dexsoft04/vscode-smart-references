@@ -291,9 +291,14 @@
         "when": "editorTextFocus"
       },
       {
+        "command": "smartReferences.searchTextFromSelection",
+        "key": "ctrl+alt+u",
+        "when": "editorTextFocus && editorHasSelection"
+      },
+      {
         "command": "smartReferences.searchText",
         "key": "ctrl+alt+u",
-        "when": "editorTextFocus || !inputFocus"
+        "when": "(editorTextFocus && !editorHasSelection) || !inputFocus"
       },
       {
         "command": "smartReferences.previousTextSearchHistory",
@@ -873,6 +878,7 @@
     "typescript": "^5.3.0"
   },
   "dependencies": {
-    "@vscode/ripgrep": "^1.17.1"
+    "@vscode/ripgrep": "^1.17.1",
+    "shiki": "^4.0.2"
   }
 }

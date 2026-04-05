@@ -75,7 +75,7 @@ export function activate(context: vscode.ExtensionContext): SmartReferencesExten
   );
   const lensProvider = new ReferenceLensProvider(testDetector);
   const previewer = new ReferencePreviewManager();
-  const codePreviewProvider = new CodePreviewViewProvider();
+  const codePreviewProvider = new CodePreviewViewProvider(outputChannel);
   const textSearchProvider = new TextSearchTreeProvider();
   const getTextSearchHistoryLimit = (): number => normalizeTextSearchHistoryLimit(
     vscode.workspace.getConfiguration('smartReferences').get<number>('textSearch.historySize', DEFAULT_TEXT_SEARCH_HISTORY_LIMIT),
