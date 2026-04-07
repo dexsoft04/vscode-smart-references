@@ -128,11 +128,16 @@ export function registerReferenceCommands(deps: ReferenceCommandsDeps): vscode.D
       if (isDoubleClick) {
         await previewer.preview(uri, range);
       } else {
-        const updates = [codePreviewProvider.updatePreview(uri, range)];
-        if (deps.textSearchCodePreviewProvider) {
-          updates.push(deps.textSearchCodePreviewProvider.updatePreview(uri, range));
-        }
-        await Promise.all(updates);
+        await codePreviewProvider.updatePreview(uri, range);
+      }
+    },
+  );
+
+  const previewTextSearchCmd = vscode.commands.registerCommand(
+    'smartReferences.previewTextSearchReference',
+    async (uri: vscode.Uri, range: vscode.Range) => {
+      if (deps.textSearchCodePreviewProvider) {
+        await deps.textSearchCodePreviewProvider.updatePreview(uri, range);
       }
     },
   );
@@ -351,6 +356,7 @@ export function registerReferenceCommands(deps: ReferenceCommandsDeps): vscode.D
   return [
     findCmd,
     previewCmd,
+    previewTextSearchCmd,
     findAtCmd,
     hierarchyCmd,
     goToImplCmd,

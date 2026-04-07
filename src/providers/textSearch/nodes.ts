@@ -41,7 +41,7 @@ export class MatchNode extends vscode.TreeItem {
     this.resourceUri = match.uri;
     this.iconPath = new vscode.ThemeIcon(match.contentKind === 'comment' ? 'comment' : 'search');
     this.command = {
-      command: 'smartReferences.previewReference',
+      command: 'smartReferences.previewTextSearchReference',
       title: t('预览搜索命中', 'Preview Search Match'),
       arguments: [match.uri, match.range],
     };
@@ -58,7 +58,7 @@ export class ContextLineNode extends vscode.TreeItem {
       role === 'before' ? 'arrow-up' : role === 'after' ? 'arrow-down' : 'search',
     );
     this.command = {
-      command: 'smartReferences.previewReference',
+      command: 'smartReferences.previewTextSearchReference',
       title: role === 'current' ? t('预览搜索命中', 'Preview Search Match') : t('预览搜索上下文', 'Preview Search Context'),
       arguments: [
         match.uri,
