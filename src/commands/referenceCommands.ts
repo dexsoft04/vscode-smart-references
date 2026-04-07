@@ -39,7 +39,7 @@ export function registerReferenceCommands(deps: ReferenceCommandsDeps): vscode.D
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Window,
-        title: 'IntelliJ-Style References: analyzing...',
+        title: 'IntelliJ-Style Dev: analyzing...',
       },
       async () => {
         try {
@@ -59,7 +59,7 @@ export function registerReferenceCommands(deps: ReferenceCommandsDeps): vscode.D
           scheduleRevealActiveReference(vscode.window.activeTextEditor);
           await vscode.commands.executeCommand('smartReferencesTree.focus');
         } catch (err) {
-          vscode.window.showErrorMessage(`IntelliJ-Style References error: ${String(err)}`);
+          vscode.window.showErrorMessage(`IntelliJ-Style Dev error: ${String(err)}`);
         }
       },
     );

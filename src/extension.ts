@@ -46,7 +46,7 @@ export interface SmartReferencesExtensionApi {
 }
 
 export function activate(context: vscode.ExtensionContext): SmartReferencesExtensionApi {
-  const outputChannel = vscode.window.createOutputChannel('IntelliJ-Style References');
+  const outputChannel = vscode.window.createOutputChannel('IntelliJ-Style Dev');
 
   const cache = new ReferenceCache();
   const testDetector = new TestFileDetector();

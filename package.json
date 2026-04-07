@@ -1,7 +1,7 @@
 {
-  "name": "vscode-intellij-style-references",
-  "displayName": "IntelliJ-Style References",
-  "description": "IntelliJ-style classified reference finder — groups by definition, implementation, read/write access, comments, and test files",
+  "name": "vscode-intellij-style-dev",
+  "displayName": "IntelliJ-Style Dev",
+  "description": "IntelliJ-style development toolkit — classified references, enhanced search, type hierarchy, dependency explorer, and more",
   "icon": "images/icon.png",
   "version": "0.2.0",
   "publisher": "smart-references",
@@ -690,7 +690,7 @@
       }
     ],
     "configuration": {
-      "title": "IntelliJ-Style References",
+      "title": "IntelliJ-Style Dev",
       "properties": {
         "smartReferences.testFilePatterns": {
           "type": "array",

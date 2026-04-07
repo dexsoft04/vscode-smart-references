@@ -14,7 +14,7 @@ async function waitFor(getValue, label, timeoutMs = 10000) {
 }
 
 async function getApi() {
-  const extension = vscode.extensions.getExtension('smart-references.vscode-intellij-style-references');
+  const extension = vscode.extensions.getExtension('smart-references.vscode-intellij-style-dev');
   assert(extension, 'extension should be registered');
   return extension.activate();
 }
