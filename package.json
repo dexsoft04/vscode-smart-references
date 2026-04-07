@@ -6,6 +6,10 @@
   "version": "0.2.0",
   "license": "MIT",
   "publisher": "smart-references",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dexsoft04/vscode-smart-references.git"
+  },
   "keywords": [
     "find usages",
     "references",

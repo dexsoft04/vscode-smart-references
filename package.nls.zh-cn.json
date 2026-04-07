@@ -34,8 +34,8 @@
   "config.textSearch.maxFuzzyMatches.description": "搜索增强在模糊搜索模式下最多收集多少条命中。",
   "view.codePreview.name": "代码预览",
   "view.textSearchCodePreview.name": "代码预览",
-  "viewContainer.projectPanel.title": "项目文件",
-  "view.projectExplorer.name": "项目文件",
+  "viewContainer.projectPanel.title": "文件",
+  "view.projectExplorer.name": "文件",
   "viewContainer.structurePanel.title": "文件结构",
   "viewContainer.depPanel.title": "依赖"
 }
