@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { ClassifiedReference, ReferenceCategory } from '../core/ReferenceTypes';
 import { runConcurrent } from '../core/concurrent';
+import { MAX_CONCURRENT_LSP_REQUESTS } from '../core/constants';
 
 function rangesOverlap(a: vscode.Range, b: vscode.Range): boolean {
   return !a.end.isBefore(b.start) && !b.end.isBefore(a.start);
@@ -22,7 +23,7 @@ export async function classifyReadWrite(
     byFile.get(key)!.push(ref);
   }
 
-  await runConcurrent(Array.from(byFile.values()), 8, async (fileRefs) => {
+  await runConcurrent(Array.from(byFile.values()), MAX_CONCURRENT_LSP_REQUESTS, async (fileRefs) => {
       const refUri = fileRefs[0].location.uri;
       // Use any reference position in this file to query highlights
       const queryPos = refUri.toString() === originalUri.toString()
@@ -37,8 +38,9 @@ export async function classifyReadWrite(
           queryPos,
         );
         if (Array.isArray(raw)) highlights = raw;
-      } catch {
+      } catch (err) {
         // LSP doesn't support highlights — leave as ReadAccess
+        console.warn(`[highlight-analyzer] highlight query failed for ${refUri.fsPath}: ${err}`);
         return;
       }
 

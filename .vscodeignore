@@ -1,8 +1,12 @@
 .vscode/**
 src/**
+tests/**
 node_modules/**
 !node_modules/@vscode/ripgrep/**
 !node_modules/shiki/**
 !node_modules/@shikijs/**
+out-tsc/**
 tsconfig.json
+tsconfig.test.json
+esbuild.config.mjs
 **/*.map

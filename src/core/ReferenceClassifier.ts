@@ -6,6 +6,7 @@ import { markComments } from '../analyzers/SemanticTokenAnalyzer';
 import { TestFileDetector } from '../analyzers/TestFileDetector';
 import { ReferenceCache } from './Cache';
 import { runConcurrent } from './concurrent';
+import { MAX_CONCURRENT_LSP_REQUESTS } from './constants';
 import { classifyUsageType } from '../analyzers/UsageClassifier';
 import { ProtoReferenceBundle, ProtoWorkspaceNavigator } from './ProtoWorkspaceNavigator';
 
@@ -50,7 +51,7 @@ async function loadContainingSymbols(
     if (!byFile.has(key)) byFile.set(key, []);
     byFile.get(key)!.push(ref);
   }
-  await runConcurrent(Array.from(byFile.values()), 8, async fileRefs => {
+  await runConcurrent(Array.from(byFile.values()), MAX_CONCURRENT_LSP_REQUESTS, async fileRefs => {
     try {
       const uri = fileRefs[0].location.uri;
       const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
@@ -62,8 +63,9 @@ async function loadContainingSymbols(
       for (const ref of fileRefs) {
         ref.containingSymbol = findContainingSymbol(symbols, ref.location.range.start);
       }
-    } catch {
-      // leave containingSymbol undefined
+    } catch (err) {
+      // leave containingSymbol undefined — file may be closed or LSP unavailable
+      console.warn(`[ref-classifier] symbol load failed for ${fileRefs[0].location.uri.fsPath}: ${err}`);
     }
   });
   return symbolsByFile;
@@ -95,8 +97,9 @@ async function loadLineTexts(refs: ClassifiedReference[]): Promise<void> {
           }
           ref.contextLines = { before, after };
         }
-      } catch {
+      } catch (err) {
         // File unreadable — leave lineText empty
+        console.warn(`[ref-classifier] line text load failed for ${fileRefs[0].location.uri.fsPath}: ${err}`);
       }
     }),
   );

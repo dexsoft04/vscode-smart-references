@@ -1,5 +1,13 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import {
+  SCORE_EXACT_MATCH, SCORE_STARTS_WITH, SCORE_CAMEL_CASE, SCORE_CONTAINS,
+  SCORE_LSP_BASE, SCORE_TEST_PENALTY, SCORE_LANG_BOOST, SCORE_PATH_WORKSPACE,
+  SCORE_KIND_CLASS, SCORE_KIND_FUNCTION, SCORE_KIND_VARIABLE, SCORE_KIND_DEFAULT,
+  SCORE_PROXIMITY_SAME_DIR, SCORE_PROXIMITY_SIBLING,
+  SCORE_RECENT_MAX, SCORE_RECENT_DECAY, SCORE_LENGTH_PENALTY_CAP,
+  MAX_RECENT_SYMBOLS,
+} from './constants';
 
 // ── Symbol categories ────────────────────────────────────────────────────────
 
@@ -78,8 +86,6 @@ export interface RankedSymbol {
   score: number;
 }
 
-const MAX_RECENT = 50;
-
 function symbolKey(sym: vscode.SymbolInformation): string {
   return sym.name + '\0' + sym.location.uri.toString();
 }
@@ -93,7 +99,7 @@ export class SymbolRanker {
     const key = symbolKey(symbol);
     this.recent = this.recent.filter(r => symbolKey(r) !== key);
     this.recent.unshift(symbol);
-    if (this.recent.length > MAX_RECENT) this.recent.pop();
+    if (this.recent.length > MAX_RECENT_SYMBOLS) this.recent.pop();
     this.rebuildRecentMap();
   }
 
@@ -128,17 +134,17 @@ export class SymbolRanker {
       let matchScore = 0;
       for (const q of queries) {
         if (nameLower === q) {
-          matchScore = Math.max(matchScore, 5000);
+          matchScore = Math.max(matchScore, SCORE_EXACT_MATCH);
         } else if (nameLower.startsWith(q)) {
-          matchScore = Math.max(matchScore, 4000);
+          matchScore = Math.max(matchScore, SCORE_STARTS_WITH);
         } else if (camelCaseMatch(q, name)) {
-          matchScore = Math.max(matchScore, 3000);
+          matchScore = Math.max(matchScore, SCORE_CAMEL_CASE);
         } else if (nameLower.includes(q)) {
-          matchScore = Math.max(matchScore, 2000);
+          matchScore = Math.max(matchScore, SCORE_CONTAINS);
         }
       }
       if (matchScore === 0) {
-        matchScore = 1000; // LSP already matched — trust the provider
+        matchScore = SCORE_LSP_BASE;
       }
 
       const kindScore = symbolKindScore(sym.kind);
@@ -146,8 +152,8 @@ export class SymbolRanker {
       const recentScore = this.recentScore(sym);
       const proximity = this.proximityScore(sym.location.uri, contextDir);
       const langBoost = mainLangScore(sym.location.uri, mainLangExtensions);
-      const testPenalty = isTest?.(sym.location.uri) ? -800 : 0;
-      const lengthPenalty = Math.min(name.length, 100);
+      const testPenalty = isTest?.(sym.location.uri) ? SCORE_TEST_PENALTY : 0;
+      const lengthPenalty = Math.min(name.length, SCORE_LENGTH_PENALTY_CAP);
 
       results.push({
         symbol: sym,
@@ -172,20 +178,20 @@ export class SymbolRanker {
   }
 
   private pathScore(uri: vscode.Uri): number {
-    return this.excludeRe.test(uri.fsPath) ? 0 : 300;
+    return this.excludeRe.test(uri.fsPath) ? 0 : SCORE_PATH_WORKSPACE;
   }
 
   private recentScore(sym: vscode.SymbolInformation): number {
     const idx = this.recentMap.get(symbolKey(sym));
     if (idx === undefined) return 0;
-    return Math.max(0, 800 - idx * 16);
+    return Math.max(0, SCORE_RECENT_MAX - idx * SCORE_RECENT_DECAY);
   }
 
   private proximityScore(symbolUri: vscode.Uri, contextDir: string | undefined): number {
     if (!contextDir) return 0;
     const symbolDir = path.dirname(symbolUri.fsPath);
-    if (symbolDir === contextDir) return 200;
-    if (path.dirname(symbolDir) === path.dirname(contextDir)) return 100;
+    if (symbolDir === contextDir) return SCORE_PROXIMITY_SAME_DIR;
+    if (path.dirname(symbolDir) === path.dirname(contextDir)) return SCORE_PROXIMITY_SIBLING;
     return 0;
   }
 }
@@ -195,16 +201,16 @@ function symbolKindScore(kind: vscode.SymbolKind): number {
     case vscode.SymbolKind.Class:
     case vscode.SymbolKind.Interface:
     case vscode.SymbolKind.Enum:
-      return 500;
+      return SCORE_KIND_CLASS;
     case vscode.SymbolKind.Function:
     case vscode.SymbolKind.Method:
     case vscode.SymbolKind.Constructor:
-      return 400;
+      return SCORE_KIND_FUNCTION;
     case vscode.SymbolKind.Variable:
     case vscode.SymbolKind.Constant:
-      return 200;
+      return SCORE_KIND_VARIABLE;
     default:
-      return 100;
+      return SCORE_KIND_DEFAULT;
   }
 }
 
@@ -227,5 +233,5 @@ function camelCaseMatch(query: string, name: string): boolean {
 function mainLangScore(uri: vscode.Uri, extensions: string[]): number {
   if (extensions.length === 0) return 0;
   const p = uri.fsPath;
-  return extensions.some(ext => p.endsWith(ext)) ? 600 : 0;
+  return extensions.some(ext => p.endsWith(ext)) ? SCORE_LANG_BOOST : 0;
 }

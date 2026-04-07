@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { DepSymbolIndexer } from './GoDepSymbolIndexer';
 import { NodeDependencyResolver } from './NodeDependencyResolver';
+import { BaseDepSymbolIndexer } from './BaseDepSymbolIndexer';
 
 const EXPORT_CLASS_RE = /^\s*export\s+(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?class\s+([A-Z]\w*)/;
 const EXPORT_INTERFACE_RE = /^\s*export\s+(?:declare\s+)?interface\s+([A-Z]\w*)/;
@@ -25,37 +25,15 @@ const SKIP_DIRS = new Set([
   'coverage',
 ]);
 
-export class NodeDepSymbolIndexer implements DepSymbolIndexer {
-  private cache: vscode.SymbolInformation[] | undefined;
-  private dirty = true;
-  private readonly log: vscode.OutputChannel;
+export class NodeDepSymbolIndexer extends BaseDepSymbolIndexer {
+  protected readonly logPrefix = 'node-dep-index';
 
-  constructor(log: vscode.OutputChannel) {
-    this.log = log;
-  }
-
-  invalidate(): void {
-    this.dirty = true;
-    this.cache = undefined;
-  }
-
-  async getSymbols(): Promise<vscode.SymbolInformation[]> {
-    if (!this.dirty && this.cache) return this.cache;
-    await this.buildIndex();
-    return this.cache ?? [];
-  }
-
-  private async buildIndex(): Promise<void> {
-    const t0 = Date.now();
-    this.log.appendLine('[node-dep-index] building index...');
-
+  protected async buildIndex(): Promise<{ symbols: vscode.SymbolInformation[]; depCount?: number }> {
     const resolver = new NodeDependencyResolver();
     const applicable = await resolver.detect();
     if (!applicable) {
-      this.cache = [];
-      this.dirty = false;
-      this.log.appendLine('[node-dep-index] no Node project found, index empty');
-      return;
+      this.log.appendLine(`[${this.logPrefix}] no Node project found, index empty`);
+      return { symbols: [] };
     }
 
     const deps = await resolver.resolve();
@@ -65,15 +43,8 @@ export class NodeDepSymbolIndexer implements DepSymbolIndexer {
       if (!dep.localDir || dep.workspaceLocal) continue;
       scanNodeDependency(dep.localDir, dep.name, symbols);
     }
-
-    this.cache = symbols;
-    this.dirty = false;
-    this.log.appendLine(
-      `[node-dep-index] done: ${symbols.length} symbols from ${deps.filter(d => d.localDir && !d.workspaceLocal).length} deps in ${Date.now() - t0}ms`,
-    );
+    return { symbols, depCount: deps.filter(d => d.localDir && !d.workspaceLocal).length };
   }
-
-  dispose(): void { /* nothing to clean up */ }
 }
 
 function scanNodeDependency(

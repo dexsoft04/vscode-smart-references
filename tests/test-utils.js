@@ -10,13 +10,13 @@ const {
   resolveProjectRoot,
   resolveProjectViewMode,
   shouldDimMergedTestFile,
-} = require('../out/providers/ProjectExplorerGrouping');
+} = require('../out-tsc/providers/ProjectExplorerGrouping');
 const {
   DEFAULT_TEXT_SEARCH_HISTORY_LIMIT,
   normalizeTextSearchHistoryLimit,
   pushTextSearchHistory,
   sanitizeTextSearchHistory,
-} = require('../out/core/TextSearchHistory');
+} = require('../out-tsc/core/TextSearchHistory');
 
 // ── Inline the pure functions under test ──────────────────────────────────────
 

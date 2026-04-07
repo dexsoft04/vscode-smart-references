@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { DepSymbolIndexer } from './GoDepSymbolIndexer';
 import { PythonDependencyResolver } from './PythonDependencyResolver';
+import { BaseDepSymbolIndexer } from './BaseDepSymbolIndexer';
 
 // ── Regex patterns for public Python declarations ────────────────────────────
 
@@ -12,37 +12,15 @@ const MODULE_RE   = /^#\s*module:\s*([\w.]+)/i; // optional inline module hint
 
 // ── PythonDepSymbolIndexer ───────────────────────────────────────────────────
 
-export class PythonDepSymbolIndexer implements DepSymbolIndexer {
-  private cache: vscode.SymbolInformation[] | undefined;
-  private dirty = true;
-  private readonly log: vscode.OutputChannel;
+export class PythonDepSymbolIndexer extends BaseDepSymbolIndexer {
+  protected readonly logPrefix = 'py-dep-index';
 
-  constructor(log: vscode.OutputChannel) {
-    this.log = log;
-  }
-
-  invalidate(): void {
-    this.dirty = true;
-    this.cache = undefined;
-  }
-
-  async getSymbols(): Promise<vscode.SymbolInformation[]> {
-    if (!this.dirty && this.cache) return this.cache;
-    await this.buildIndex();
-    return this.cache ?? [];
-  }
-
-  private async buildIndex(): Promise<void> {
-    const t0 = Date.now();
-    this.log.appendLine('[py-dep-index] building index...');
-
+  protected async buildIndex(): Promise<{ symbols: vscode.SymbolInformation[]; depCount?: number }> {
     const resolver = new PythonDependencyResolver();
     const applicable = await resolver.detect();
     if (!applicable) {
-      this.cache = [];
-      this.dirty = false;
-      this.log.appendLine('[py-dep-index] no Python project found, index empty');
-      return;
+      this.log.appendLine(`[${this.logPrefix}] no Python project found, index empty`);
+      return { symbols: [] };
     }
 
     const deps = await resolver.resolve();
@@ -52,15 +30,8 @@ export class PythonDepSymbolIndexer implements DepSymbolIndexer {
       if (!dep.localDir) continue;
       scanPythonDirectory(dep.localDir, dep.name, symbols);
     }
-
-    this.cache = symbols;
-    this.dirty = false;
-    this.log.appendLine(
-      `[py-dep-index] done: ${symbols.length} symbols from ${deps.filter(d => d.localDir).length} deps in ${Date.now() - t0}ms`,
-    );
+    return { symbols, depCount: deps.filter(d => d.localDir).length };
   }
-
-  dispose(): void { /* nothing to clean up */ }
 }
 
 // ── File scanning (iterative, no recursion) ──────────────────────────────────

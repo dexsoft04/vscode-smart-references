@@ -592,6 +592,16 @@
           "id": "smartReferencesProjectPanel",
           "title": "%viewContainer.projectPanel.title%",
           "icon": "images/icon.svg"
+        },
+        {
+          "id": "smartReferencesStructurePanel",
+          "title": "%viewContainer.structurePanel.title%",
+          "icon": "images/icon.svg"
+        },
+        {
+          "id": "smartReferencesDepPanel",
+          "title": "%viewContainer.depPanel.title%",
+          "icon": "images/icon.svg"
         }
       ]
     },
@@ -609,26 +619,35 @@
         {
           "id": "typeHierarchyTree",
           "name": "Implementations"
-        },
-        {
-          "id": "structureTree",
-          "name": "Structure"
-        },
-        {
-          "id": "dependencyTree",
-          "name": "Dependencies"
         }
       ],
       "smartReferencesSearchPanel": [
         {
           "id": "textSearchTree",
           "name": "%view.textSearchTree.name%"
+        },
+        {
+          "id": "textSearchCodePreview",
+          "name": "%view.textSearchCodePreview.name%",
+          "type": "webview"
         }
       ],
       "smartReferencesProjectPanel": [
         {
           "id": "projectExplorer",
           "name": "%view.projectExplorer.name%"
+        }
+      ],
+      "smartReferencesStructurePanel": [
+        {
+          "id": "structureTree",
+          "name": "%viewContainer.structurePanel.title%"
+        }
+      ],
+      "smartReferencesDepPanel": [
+        {
+          "id": "dependencyTree",
+          "name": "%viewContainer.depPanel.title%"
         }
       ]
     },
@@ -865,16 +884,19 @@
     }
   },
   "scripts": {
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node tests/test-utils.js && node tests/test-dependencies.js && node tests/test-proto-symbols.js",
-    "package": "vsce package",
-    "test:vscode": "npm run compile && node tests/run-vscode-tests.js"
+    "compile": "node esbuild.config.mjs",
+    "compile:types": "tsc -p ./ --noEmit",
+    "compile:test": "tsc -p tsconfig.test.json",
+    "watch": "node esbuild.config.mjs --watch",
+    "test": "npm run compile:test && node tests/test-utils.js && node tests/test-dependencies.js && node tests/test-proto-symbols.js && node tests/test-comment-detection.js",
+    "package": "node esbuild.config.mjs --production && vsce package",
+    "test:vscode": "npm run compile:test && node tests/run-vscode-tests.js"
   },
   "devDependencies": {
     "@types/node": "^18.0.0",
     "@types/vscode": "^1.80.0",
     "@vscode/test-electron": "^2.5.2",
+    "esbuild": "^0.28.0",
     "typescript": "^5.3.0"
   },
   "dependencies": {

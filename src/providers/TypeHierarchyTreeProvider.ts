@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { TestFileDetector } from '../analyzers/TestFileDetector';
 import { runConcurrent } from '../core/concurrent';
+import { MAX_CONCURRENT_LSP_REQUESTS } from '../core/constants';
 import { makeCategoryUri } from './CategoryDecorationProvider';
 
 // ── Classified implementation ───────────────────────────────────────────────
@@ -290,7 +291,7 @@ export class TypeHierarchyTreeProvider
       if (!byFile.has(key)) byFile.set(key, []);
       byFile.get(key)!.push(impl);
     }
-    await runConcurrent(Array.from(byFile.values()), 8, async fileImpls => {
+    await runConcurrent(Array.from(byFile.values()), MAX_CONCURRENT_LSP_REQUESTS, async fileImpls => {
       try {
         const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
           'vscode.executeDocumentSymbolProvider',

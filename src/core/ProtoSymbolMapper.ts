@@ -165,6 +165,123 @@ export function createProtoPackageHints(
   );
 }
 
+interface AliasParams {
+  raw: string;
+  snake: string;
+  camel: string;
+  pascal: string;
+  context: Partial<ProtoSymbolContext>;
+}
+
+interface ProtoLanguageRule {
+  field(p: AliasParams): string[];
+  service(p: AliasParams): string[];
+  callable(p: AliasParams): string[];
+  enumValue(p: AliasParams): string[];
+  generic(p: AliasParams): string[];
+}
+
+const GO_RULE: ProtoLanguageRule = {
+  field: ({ pascal }) => [pascal, `Get${pascal}`],
+  service: ({ pascal }) => [
+    pascal, `${pascal}Client`, `${pascal}Server`,
+    `Unimplemented${pascal}Server`, `Unsafe${pascal}Server`,
+    `Register${pascal}Server`, `New${pascal}Client`,
+  ],
+  callable: ({ pascal }) => [pascal],
+  enumValue: ({ raw, pascal }) => [raw, pascal],
+  generic: ({ pascal }) => [pascal, `Get${pascal}`],
+};
+
+const JAVA_RULE: ProtoLanguageRule = {
+  field: ({ camel, pascal, context }) => accessorAliases(camel, pascal, supportsPresence(context)),
+  service: ({ pascal }) => [
+    pascal, `${pascal}Grpc`, `${pascal}Stub`,
+    `${pascal}BlockingStub`, `${pascal}FutureStub`, `${pascal}ImplBase`,
+  ],
+  callable: ({ camel, pascal }) => [camel, pascal],
+  enumValue: ({ raw, pascal }) => [raw, pascal],
+  generic: ({ camel, pascal, context }) => accessorAliases(camel, pascal, supportsPresence(context)),
+};
+
+const KOTLIN_RULE: ProtoLanguageRule = {
+  field: ({ camel, pascal, context }) => accessorAliases(camel, pascal, supportsPresence(context)),
+  service: ({ pascal }) => [
+    pascal, `${pascal}Grpc`, `${pascal}GrpcKt`, `${pascal}Stub`,
+    `${pascal}CoroutineStub`, `${pascal}CoroutineImplBase`,
+  ],
+  callable: ({ camel, pascal }) => [camel, pascal],
+  enumValue: ({ raw, pascal }) => [raw, pascal],
+  generic: ({ camel, pascal, context }) => accessorAliases(camel, pascal, supportsPresence(context)),
+};
+
+const JS_TS_RULE: ProtoLanguageRule = {
+  field: ({ camel, pascal, context }) => accessorAliases(camel, pascal, supportsPresence(context)),
+  service: ({ camel, pascal }) => [
+    pascal, camel, `${pascal}Client`, `${pascal}PromiseClient`,
+    `${pascal}Service`, `I${pascal}Service`,
+  ],
+  callable: ({ camel, pascal }) => [camel, pascal],
+  enumValue: ({ raw, pascal }) => [raw, pascal],
+  generic: ({ camel, pascal, context }) => accessorAliases(camel, pascal, supportsPresence(context)),
+};
+
+const CSHARP_RULE: ProtoLanguageRule = {
+  field: ({ pascal }) => [pascal],
+  service: ({ pascal }) => [pascal, `${pascal}Client`, `${pascal}Base`, `BindService`],
+  callable: ({ pascal }) => [pascal],
+  enumValue: ({ raw, pascal, context }) => {
+    const stripped = stripEnumPrefix(raw, context.containerName);
+    const strippedPascal = toPascalCase(stripped);
+    return [raw, stripped, strippedPascal, pascal];
+  },
+  generic: ({ pascal }) => [pascal, `Get${pascal}`],
+};
+
+const PYTHON_RULE: ProtoLanguageRule = {
+  field: ({ snake }) => [snake],
+  service: ({ pascal }) => [
+    pascal, `${pascal}Stub`, `${pascal}Servicer`,
+    `add_${pascal}Servicer_to_server`,
+  ],
+  callable: ({ camel, pascal }) => [camel, pascal],
+  enumValue: ({ raw, pascal }) => [raw, pascal],
+  generic: ({ snake, pascal }) => [snake, pascal],
+};
+
+const RUST_RULE: ProtoLanguageRule = {
+  field: ({ snake, pascal }) => [snake, pascal],
+  service: ({ pascal }) => [snakeServiceModule(pascal), pascal, `${pascal}Client`, `${pascal}Server`],
+  callable: ({ camel, pascal }) => [camel, pascal],
+  enumValue: ({ raw, pascal }) => [raw, pascal],
+  generic: ({ snake, pascal }) => [snake, pascal],
+};
+
+const DEFAULT_RULE: ProtoLanguageRule = {
+  field: ({ snake, camel, pascal }) => [snake, camel, pascal],
+  service: ({ camel, pascal }) => [
+    pascal, camel, `${pascal}Client`, `${pascal}Server`, `${pascal}Service`,
+  ],
+  callable: ({ camel, pascal }) => [camel, pascal],
+  enumValue: ({ raw, pascal }) => [raw, pascal],
+  generic: ({ snake, camel, pascal }) => [snake, camel, pascal, `Get${pascal}`, `get${pascal}`],
+};
+
+const LANGUAGE_RULES = new Map<WorkspaceLanguageId, ProtoLanguageRule>([
+  ['go', GO_RULE],
+  ['java', JAVA_RULE],
+  ['kotlin', KOTLIN_RULE],
+  ['javascript', JS_TS_RULE],
+  ['typescript', JS_TS_RULE],
+  ['csharp', CSHARP_RULE],
+  ['python', PYTHON_RULE],
+  ['rust', RUST_RULE],
+]);
+
+function getLanguageRule(language: WorkspaceLanguageId): ProtoLanguageRule {
+  return LANGUAGE_RULES.get(language) ?? DEFAULT_RULE;
+}
+
 export function createProtoSearchAliases(
   rawInput: string,
   language: WorkspaceLanguageId,
@@ -180,185 +297,31 @@ export function createProtoSearchAliases(
   const pascal = toPascalCase(baseName);
   const aliases: string[] = [raw, baseName];
 
+  const rule = getLanguageRule(language);
+  const params: AliasParams = { raw, snake, camel, pascal, context };
+
   switch (semanticKind) {
     case 'type':
       aliases.push(pascal, camel);
       break;
     case 'service':
-      aliases.push(...serviceAliasesForLanguage(language, camel, pascal));
+      aliases.push(...rule.service(params));
       break;
     case 'field':
-      aliases.push(...fieldAliasesForLanguage(language, snake, camel, pascal, context));
+      aliases.push(...rule.field(params));
       break;
     case 'callable':
-      aliases.push(...callableAliasesForLanguage(language, camel, pascal));
+      aliases.push(...rule.callable(params));
       break;
     case 'value':
-      aliases.push(...enumValueAliasesForLanguage(language, raw, pascal, context.containerName));
+      aliases.push(...rule.enumValue(params));
       break;
     default:
-      aliases.push(...genericAliasesForLanguage(language, snake, camel, pascal, context));
+      aliases.push(...rule.generic(params));
       break;
   }
 
   return uniqueAliases(aliases);
-}
-
-function genericAliasesForLanguage(
-  language: WorkspaceLanguageId,
-  snake: string,
-  camel: string,
-  pascal: string,
-  context: Partial<ProtoSymbolContext>,
-): string[] {
-  switch (language) {
-    case 'go':
-    case 'csharp':
-      return [pascal, `Get${pascal}`];
-    case 'java':
-    case 'kotlin':
-    case 'javascript':
-    case 'typescript':
-      return accessorAliases(camel, pascal, supportsPresence(context));
-    case 'python':
-      return [snake, pascal];
-    case 'rust':
-      return [snake, pascal];
-    default:
-      return [snake, camel, pascal, `Get${pascal}`, `get${pascal}`];
-  }
-}
-
-function fieldAliasesForLanguage(
-  language: WorkspaceLanguageId,
-  snake: string,
-  camel: string,
-  pascal: string,
-  context: Partial<ProtoSymbolContext>,
-): string[] {
-  switch (language) {
-    case 'go':
-      return [pascal, `Get${pascal}`];
-    case 'csharp':
-      return [pascal];
-    case 'java':
-    case 'kotlin':
-    case 'javascript':
-    case 'typescript':
-      return accessorAliases(camel, pascal, supportsPresence(context));
-    case 'python':
-      return [snake];
-    case 'rust':
-      return [snake, pascal];
-    default:
-      return [snake, camel, pascal];
-  }
-}
-
-function serviceAliasesForLanguage(
-  language: WorkspaceLanguageId,
-  camel: string,
-  pascal: string,
-): string[] {
-  switch (language) {
-    case 'go':
-      return [
-        pascal,
-        `${pascal}Client`,
-        `${pascal}Server`,
-        `Unimplemented${pascal}Server`,
-        `Unsafe${pascal}Server`,
-        `Register${pascal}Server`,
-        `New${pascal}Client`,
-      ];
-    case 'java':
-      return [
-        pascal,
-        `${pascal}Grpc`,
-        `${pascal}Stub`,
-        `${pascal}BlockingStub`,
-        `${pascal}FutureStub`,
-        `${pascal}ImplBase`,
-      ];
-    case 'kotlin':
-      return [
-        pascal,
-        `${pascal}Grpc`,
-        `${pascal}GrpcKt`,
-        `${pascal}Stub`,
-        `${pascal}CoroutineStub`,
-        `${pascal}CoroutineImplBase`,
-      ];
-    case 'javascript':
-    case 'typescript':
-      return [
-        pascal,
-        camel,
-        `${pascal}Client`,
-        `${pascal}PromiseClient`,
-        `${pascal}Service`,
-        `I${pascal}Service`,
-      ];
-    case 'csharp':
-      return [
-        pascal,
-        `${pascal}Client`,
-        `${pascal}Base`,
-        `BindService`,
-      ];
-    case 'python':
-      return [
-        pascal,
-        `${pascal}Stub`,
-        `${pascal}Servicer`,
-        `add_${pascal}Servicer_to_server`,
-      ];
-    case 'rust':
-      return [snakeServiceModule(pascal), pascal, `${pascal}Client`, `${pascal}Server`];
-    default:
-      return [
-        pascal,
-        camel,
-        `${pascal}Client`,
-        `${pascal}Server`,
-        `${pascal}Service`,
-      ];
-  }
-}
-
-function callableAliasesForLanguage(
-  language: WorkspaceLanguageId,
-  camel: string,
-  pascal: string,
-): string[] {
-  switch (language) {
-    case 'go':
-    case 'csharp':
-      return [pascal];
-    case 'java':
-    case 'kotlin':
-    case 'javascript':
-    case 'typescript':
-    case 'python':
-    case 'rust':
-      return [camel, pascal];
-    default:
-      return [camel, pascal];
-  }
-}
-
-function enumValueAliasesForLanguage(
-  language: WorkspaceLanguageId,
-  raw: string,
-  pascal: string,
-  containerName?: string,
-): string[] {
-  if (language === 'csharp') {
-    const stripped = stripEnumPrefix(raw, containerName);
-    const strippedPascal = toPascalCase(stripped);
-    return [raw, stripped, strippedPascal, pascal];
-  }
-  return [raw, pascal];
 }
 
 function uniqueAliases(values: string[]): string[] {

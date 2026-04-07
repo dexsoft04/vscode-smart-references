@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import { GoModResolver } from './DependencyResolver';
+import { BaseDepSymbolIndexer } from './BaseDepSymbolIndexer';
 
 // ── Regex patterns for exported Go declarations ───────────────────────────────
 
@@ -21,42 +22,15 @@ export interface DepSymbolIndexer extends vscode.Disposable {
 
 // ── GoDepSymbolIndexer ────────────────────────────────────────────────────────
 
-export class GoDepSymbolIndexer implements DepSymbolIndexer {
-  private cache: vscode.SymbolInformation[] | undefined;
-  private dirty = true;
-  private readonly log: vscode.OutputChannel;
+export class GoDepSymbolIndexer extends BaseDepSymbolIndexer {
+  protected readonly logPrefix = 'go-dep-index';
 
-  constructor(log: vscode.OutputChannel) {
-    this.log = log;
-  }
-
-  /** Mark index as stale (call when go.mod changes) */
-  invalidate(): void {
-    this.dirty = true;
-    this.cache = undefined;
-  }
-
-  /**
-   * Return all indexed symbols. Builds index on first call or after invalidate().
-   * The QuickPick should set `busy=true` before calling this.
-   */
-  async getSymbols(): Promise<vscode.SymbolInformation[]> {
-    if (!this.dirty && this.cache) return this.cache;
-    await this.buildIndex();
-    return this.cache ?? [];
-  }
-
-  private async buildIndex(): Promise<void> {
-    const t0 = Date.now();
-    this.log.appendLine('[dep-index] building index...');
-
+  protected async buildIndex(): Promise<{ symbols: vscode.SymbolInformation[]; depCount?: number }> {
     const resolver = new GoModResolver();
     const applicable = await resolver.detect();
     if (!applicable) {
-      this.cache = [];
-      this.dirty = false;
-      this.log.appendLine('[dep-index] no go.mod found, index empty');
-      return;
+      this.log.appendLine(`[${this.logPrefix}] no go.mod found, index empty`);
+      return { symbols: [] };
     }
 
     const deps = await resolver.resolve();
@@ -66,13 +40,8 @@ export class GoDepSymbolIndexer implements DepSymbolIndexer {
       if (!dep.localDir) continue;
       scanDirectorySync(dep.localDir, dep.name, symbols);
     }
-
-    this.cache = symbols;
-    this.dirty = false;
-    this.log.appendLine(`[dep-index] done: ${symbols.length} symbols from ${deps.filter(d => d.localDir).length} deps in ${Date.now() - t0}ms`);
+    return { symbols, depCount: deps.filter(d => d.localDir).length };
   }
-
-  dispose(): void { /* nothing to clean up */ }
 }
 
 // ── File scanning (iterative, no recursion) ───────────────────────────────────
@@ -92,7 +61,7 @@ function scanDirectorySync(
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(currentDir, { withFileTypes: true });
-    } catch {
+    } catch { // directory unreadable — skip
       continue;
     }
 

@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { DepSymbolIndexer } from './GoDepSymbolIndexer';
 import { CSharpDependencyResolver } from './CSharpDependencyResolver';
+import { BaseDepSymbolIndexer } from './BaseDepSymbolIndexer';
 
 // ── Regex patterns for C# declarations ──────────────────────────────────────
 
@@ -16,37 +16,15 @@ const NAMESPACE_RE = /^\s*namespace\s+([\w.]+)/;
 
 // ── CSharpDepSymbolIndexer ──────────────────────────────────────────────────
 
-export class CSharpDepSymbolIndexer implements DepSymbolIndexer {
-  private cache: vscode.SymbolInformation[] | undefined;
-  private dirty = true;
-  private readonly log: vscode.OutputChannel;
+export class CSharpDepSymbolIndexer extends BaseDepSymbolIndexer {
+  protected readonly logPrefix = 'cs-dep-index';
 
-  constructor(log: vscode.OutputChannel) {
-    this.log = log;
-  }
-
-  invalidate(): void {
-    this.dirty = true;
-    this.cache = undefined;
-  }
-
-  async getSymbols(): Promise<vscode.SymbolInformation[]> {
-    if (!this.dirty && this.cache) return this.cache;
-    await this.buildIndex();
-    return this.cache ?? [];
-  }
-
-  private async buildIndex(): Promise<void> {
-    const t0 = Date.now();
-    this.log.appendLine('[cs-dep-index] building index...');
-
+  protected async buildIndex(): Promise<{ symbols: vscode.SymbolInformation[]; depCount?: number }> {
     const resolver = new CSharpDependencyResolver();
     const applicable = await resolver.detect();
     if (!applicable) {
-      this.cache = [];
-      this.dirty = false;
-      this.log.appendLine('[cs-dep-index] no .csproj or Unity manifest found, index empty');
-      return;
+      this.log.appendLine(`[${this.logPrefix}] no .csproj or Unity manifest found, index empty`);
+      return { symbols: [] };
     }
 
     const deps = await resolver.resolve();
@@ -56,15 +34,8 @@ export class CSharpDepSymbolIndexer implements DepSymbolIndexer {
       if (!dep.localDir) continue;
       scanCSharpDirectory(dep.localDir, dep.name, symbols);
     }
-
-    this.cache = symbols;
-    this.dirty = false;
-    this.log.appendLine(
-      `[cs-dep-index] done: ${symbols.length} symbols from ${deps.filter(d => d.localDir).length} deps in ${Date.now() - t0}ms`,
-    );
+    return { symbols, depCount: deps.filter(d => d.localDir).length };
   }
-
-  dispose(): void { /* nothing to clean up */ }
 }
 
 // ── File scanning (iterative, no recursion) ─────────────────────────────────

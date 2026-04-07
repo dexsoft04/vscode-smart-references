@@ -22,6 +22,7 @@ export interface SerializedPin {
 }
 import { makeCategoryUri } from './CategoryDecorationProvider';
 import { extractDocComment } from './StructureTreeProvider';
+import { MAX_REFERENCE_HISTORY, MAX_PINNED_RESULTS, AUTO_EXPAND_THRESHOLD } from '../core/constants';
 
 type TreeNode = SummaryNode | CategoryGroupNode | DirectoryNode | FileNode | CallerNode | ReferenceItem;
 export type ReferenceScopeFilter =
@@ -200,12 +201,6 @@ export class ReferenceItem extends vscode.TreeItem {
 
 // ── Provider ──────────────────────────────────────────────────────────────────
 
-const MAX_HISTORY = 20;
-const MAX_PINNED = 20;
-// When total references exceed this threshold, only the category level is
-// auto-expanded; directory / file / caller nodes start collapsed.
-const AUTO_EXPAND_THRESHOLD = 20;
-
 interface HistoryEntry {
   symbolName: string;
   refs: ClassifiedReference[];
@@ -240,6 +235,8 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
   private historyIndex = -1;
   private pinnedResults: PinnedReferenceResult[] = [];
   private keywordFilter: string = '';
+  private keywordRegex: RegExp | null = null;
+  private keywordTokens: string[] = [];
   private fileHitCountsCache: Map<string, number> | undefined;
   private readonly _onPinnedResultsChanged = new vscode.EventEmitter<void>();
   readonly onPinnedResultsChanged: vscode.Event<void> = this._onPinnedResultsChanged.event;
@@ -256,7 +253,7 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
     // Truncate forward history, push new entry
     this.history.splice(this.historyIndex + 1);
     this.history.push({ symbolName, refs, anchorUri: this.scopeAnchorUri });
-    if (this.history.length > MAX_HISTORY) this.history.shift();
+    if (this.history.length > MAX_REFERENCE_HISTORY) this.history.shift();
     this.historyIndex = this.history.length - 1;
     this.fileHitCountsCache = undefined;
     this._onDidChangeTreeData.fire();
@@ -313,9 +310,25 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
   }
 
   setKeywordFilter(keyword: string): void {
-    const normalized = keyword.toLowerCase().trim();
-    if (this.keywordFilter === normalized) return;
-    this.keywordFilter = normalized;
+    const raw = keyword.trim();
+    if (this.keywordFilter === raw) return;
+    this.keywordFilter = raw;
+    if (raw.startsWith('/') && raw.endsWith('/') && raw.length > 2) {
+      const pattern = raw.slice(1, -1);
+      try {
+        if (pattern.length > 200 || /\([^)]*[+*}]\)[+*?]|\([^)]*[+*}]\)\{/.test(pattern)) {
+          throw new Error('unsafe pattern');
+        }
+        this.keywordRegex = new RegExp(pattern, 'i');
+        this.keywordTokens = [];
+      } catch {
+        this.keywordRegex = null;
+        this.keywordTokens = raw.toLowerCase().split(/\s+/).filter(Boolean);
+      }
+    } else {
+      this.keywordRegex = null;
+      this.keywordTokens = raw.toLowerCase().split(/\s+/).filter(Boolean);
+    }
     this.applyFilter();
     this._onDidChangeTreeData.fire();
   }
@@ -357,8 +370,8 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
       anchorUri: this.scopeAnchorUri,
     };
     this.pinnedResults.unshift(entry);
-    if (this.pinnedResults.length > MAX_PINNED) {
-      this.pinnedResults.length = MAX_PINNED;
+    if (this.pinnedResults.length > MAX_PINNED_RESULTS) {
+      this.pinnedResults.length = MAX_PINNED_RESULTS;
     }
     this._onPinnedResultsChanged.fire();
     return { entry, isNew: true };
@@ -711,8 +724,12 @@ export class ReferenceTreeProvider implements vscode.TreeDataProvider<TreeNode>,
           if (!this.isWorkspaceSourceUri(ref.location.uri)) return false;
           break;
       }
-      if (keyword && !ref.lineText.toLowerCase().includes(keyword) && !ref.containingSymbol?.toLowerCase().includes(keyword)) {
-        return false;
+      if (this.keywordRegex) {
+        const text = ref.lineText + ' ' + (ref.containingSymbol ?? '');
+        if (!this.keywordRegex.test(text)) return false;
+      } else if (this.keywordTokens.length > 0) {
+        const combined = ref.lineText.toLowerCase() + ' ' + (ref.containingSymbol?.toLowerCase() ?? '');
+        if (!this.keywordTokens.every(t => combined.includes(t))) return false;
       }
       return true;
     });

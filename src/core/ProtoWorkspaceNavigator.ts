@@ -10,6 +10,7 @@ import {
   ProtoSemanticKind,
 } from './ProtoSymbolMapper';
 import { detectMainWorkspaceLanguage, WorkspaceLanguageProfile } from './WorkspaceLanguage';
+import { MAX_PROTO_FILTERED_SYMBOLS } from './constants';
 
 interface SearchPlan {
   aliases: string[];
@@ -485,7 +486,7 @@ function keepStrongest(symbols: ScoredSymbol[], hasPackageHints: boolean): Score
   }
   const strongest = symbols[0].score;
   const threshold = strongest >= 5000 ? strongest - 300 : strongest - 1200;
-  return symbols.filter(item => item.score >= threshold).slice(0, 20);
+  return symbols.filter(item => item.score >= threshold).slice(0, MAX_PROTO_FILTERED_SYMBOLS);
 }
 
 function scorePackageAffinity(

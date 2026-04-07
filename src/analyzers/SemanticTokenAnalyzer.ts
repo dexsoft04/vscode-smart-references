@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { ClassifiedReference, ReferenceCategory } from '../core/ReferenceTypes';
 import { runConcurrent } from '../core/concurrent';
+import { MAX_CONCURRENT_LSP_REQUESTS } from '../core/constants';
 
 export interface DecodedToken {
   line: number;
@@ -49,7 +50,7 @@ export async function markComments(
     byFile.get(key)!.push(ref);
   }
 
-  await runConcurrent(Array.from(byFile.values()), 8, async fileRefs => {
+  await runConcurrent(Array.from(byFile.values()), MAX_CONCURRENT_LSP_REQUESTS, async fileRefs => {
       const uri = fileRefs[0].location.uri;
       try {
         const legend = await vscode.commands.executeCommand<vscode.SemanticTokensLegend>(
@@ -83,8 +84,9 @@ export async function markComments(
             ref.category = ReferenceCategory.Comment;
           }
         }
-      } catch {
+      } catch (err) {
         // Language server doesn't support semantic tokens — skip
+        console.warn(`[semantic-token-analyzer] token fetch failed for ${uri.fsPath}: ${err}`);
       }
   });
 }

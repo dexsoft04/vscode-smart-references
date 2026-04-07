@@ -12,11 +12,11 @@ const {
   resolvePnpmLockVersion,
   resolveYarnLockVersion,
   resolveNodePackageDir,
-} = require('../out/core/NodeDependencyUtils.js');
+} = require('../out-tsc/core/NodeDependencyUtils.js');
 const {
   isStructuredTextLanguage,
   parseStructuredText,
-} = require('../out/core/StructuredTextParser.js');
+} = require('../out-tsc/core/StructuredTextParser.js');
 
 let passed = 0;
 let failed = 0;

@@ -33,6 +33,9 @@
   "config.textSearch.maxFuzzyFileScan.description": "Maximum number of files scanned in fuzzy search mode.",
   "config.textSearch.maxFuzzyMatches.description": "Maximum number of matches collected in fuzzy search mode.",
   "view.codePreview.name": "Preview",
+  "view.textSearchCodePreview.name": "Preview",
   "viewContainer.projectPanel.title": "Project Files",
-  "view.projectExplorer.name": "Project Files"
+  "view.projectExplorer.name": "Project Files",
+  "viewContainer.structurePanel.title": "Structure",
+  "viewContainer.depPanel.title": "Dependencies"
 }

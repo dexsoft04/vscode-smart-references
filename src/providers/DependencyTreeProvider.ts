@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import { execFile } from 'child_process';
 import {
   DependencyResolver,
   ResolvedDependency,
@@ -34,9 +35,11 @@ const TYPE_LABELS: Record<DependencyType, string> = {
 };
 
 export class EcosystemNode extends vscode.TreeItem {
-  constructor(public readonly group: DependencyGroup) {
+  constructor(public readonly group: DependencyGroup, sdkVersion?: string) {
     super(group.label, vscode.TreeItemCollapsibleState.Expanded);
-    this.description = `${group.deps.length} deps`;
+    this.description = sdkVersion
+      ? `${sdkVersion} · ${group.deps.length} deps`
+      : `${group.deps.length} deps`;
     this.contextValue = 'dependencyGroup';
     this.iconPath = new vscode.ThemeIcon(iconForEcosystem(group.ecosystem));
   }
@@ -93,6 +96,7 @@ export class DependencyTreeProvider implements vscode.TreeDataProvider<DepNode>,
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
   private groups: DependencyGroup[] = [];
+  private sdkVersions = new Map<DependencyEcosystem, string>();
 
   constructor(
     private readonly resolvers: DependencyResolver[],
@@ -114,6 +118,19 @@ export class DependencyTreeProvider implements vscode.TreeDataProvider<DepNode>,
     }
 
     this.groups = buildGroups(collected);
+
+    const ecosystems = this.groups.map(g => g.ecosystem);
+    const versionEntries = await Promise.all(
+      ecosystems.map(async (eco): Promise<[DependencyEcosystem, string]> => {
+        const ver = await detectSdkVersion(eco);
+        return [eco, ver];
+      }),
+    );
+    this.sdkVersions.clear();
+    for (const [eco, ver] of versionEntries) {
+      if (ver) this.sdkVersions.set(eco, ver);
+    }
+
     this.log.appendLine(`[dep-tree] groups=${this.groups.length} deps=${collected.length}`);
     this._onDidChangeTreeData.fire();
   }
@@ -124,7 +141,7 @@ export class DependencyTreeProvider implements vscode.TreeDataProvider<DepNode>,
 
   getChildren(element?: DepNode): DepNode[] {
     if (!element) {
-      return this.groups.map(group => new EcosystemNode(group));
+      return this.groups.map(group => new EcosystemNode(group, this.sdkVersions.get(group.ecosystem)));
     }
 
     if (element instanceof EcosystemNode) {
@@ -382,4 +399,52 @@ function readDirEntries(dirPath: string): FileEntryNode[] {
   } catch {
     return [];
   }
+}
+
+// ── SDK version detection ───────────────────────────────────────────────────
+
+const SDK_COMMANDS: Record<DependencyEcosystem, { cmd: string; args: string[]; parse: (out: string) => string }> = {
+  node: {
+    cmd: 'node',
+    args: ['-v'],
+    parse: out => out.trim(),  // "v18.19.1"
+  },
+  go: {
+    cmd: 'go',
+    args: ['version'],
+    parse: out => {
+      const m = out.match(/go(\d+\.\d+\.\d+)/);
+      return m ? `go${m[1]}` : out.trim().split(/\s+/)[2] ?? '';
+    },
+  },
+  python: {
+    cmd: 'python3',
+    args: ['--version'],
+    parse: out => {
+      const m = out.match(/(\d+\.\d+\.\d+)/);
+      return m ? m[1] : '';
+    },
+  },
+  csharp: {
+    cmd: 'dotnet',
+    args: ['--version'],
+    parse: out => out.trim(),
+  },
+};
+
+function detectSdkVersion(ecosystem: DependencyEcosystem): Promise<string> {
+  const spec = SDK_COMMANDS[ecosystem];
+  if (!spec) return Promise.resolve('');
+  const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  return new Promise(resolve => {
+    try {
+      const proc = execFile(spec.cmd, spec.args, { timeout: 5000, cwd }, (err, stdout) => {
+        if (err) { resolve(''); return; }
+        resolve(spec.parse(stdout));
+      });
+      proc.stdin?.end();
+    } catch {
+      resolve('');
+    }
+  });
 }

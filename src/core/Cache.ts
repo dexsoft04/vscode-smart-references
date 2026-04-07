@@ -1,12 +1,11 @@
 import * as vscode from 'vscode';
 import { ClassifiedReference } from './ReferenceTypes';
+import { CACHE_MAX_ENTRIES } from './constants';
 
 interface CacheEntry {
   refs: ClassifiedReference[];
   symbolName: string;
 }
-
-const MAX_ENTRIES = 500;
 
 export class ReferenceCache {
   private store = new Map<string, CacheEntry>();
@@ -32,7 +31,7 @@ export class ReferenceCache {
   }
 
   set(uri: vscode.Uri, position: vscode.Position, entry: CacheEntry): void {
-    if (this.store.size >= MAX_ENTRIES) {
+    if (this.store.size >= CACHE_MAX_ENTRIES) {
       const oldest = this.store.keys().next().value;
       if (oldest !== undefined) this.store.delete(oldest);
     }
