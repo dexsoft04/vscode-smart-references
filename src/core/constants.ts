@@ -29,5 +29,8 @@ export const SCORE_RECENT_DECAY = 16;
 export const SCORE_LENGTH_PENALTY_CAP = 100;
 export const MAX_RECENT_SYMBOLS = 50;
 
+// ── File search ─────────────────────────────────────────────────────────────
+export const MAX_FILE_SEARCH_RESULTS = 30;
+
 // ── Proto ────────────────────────────────────────────────────────────────────
 export const MAX_PROTO_FILTERED_SYMBOLS = 20;

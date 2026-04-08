@@ -133,11 +133,35 @@ export function registerReferenceCommands(deps: ReferenceCommandsDeps): vscode.D
     },
   );
 
+  let lastTextSearchClick: { uri: string; line: number; time: number } | undefined;
   const previewTextSearchCmd = vscode.commands.registerCommand(
     'smartReferences.previewTextSearchReference',
     async (uri: vscode.Uri, range: vscode.Range) => {
-      if (deps.textSearchCodePreviewProvider) {
-        await deps.textSearchCodePreviewProvider.updatePreview(uri, range);
+      const now = Date.now();
+      const key = uri.toString();
+      const line = range.start.line;
+      const isDoubleClick = lastTextSearchClick
+        && lastTextSearchClick.uri === key
+        && lastTextSearchClick.line === line
+        && (now - lastTextSearchClick.time) < 300;
+      lastTextSearchClick = { uri: key, line, time: now };
+
+      if (isDoubleClick) {
+        try {
+          const doc = await vscode.workspace.openTextDocument(uri);
+          await vscode.window.showTextDocument(doc, {
+            preview: false,
+            selection: range,
+          });
+        } catch (err) {
+          deps.outputChannel.appendLine(`[text-search] failed to open file: ${uri.fsPath} - ${String(err)}`);
+        }
+      } else if (deps.textSearchCodePreviewProvider) {
+        try {
+          await deps.textSearchCodePreviewProvider.updatePreview(uri, range);
+        } catch (err) {
+          deps.outputChannel.appendLine(`[text-search] preview error: ${uri.fsPath} - ${String(err)}`);
+        }
       }
     },
   );

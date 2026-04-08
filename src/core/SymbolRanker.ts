@@ -6,7 +6,7 @@ import {
   SCORE_KIND_CLASS, SCORE_KIND_FUNCTION, SCORE_KIND_VARIABLE, SCORE_KIND_DEFAULT,
   SCORE_PROXIMITY_SAME_DIR, SCORE_PROXIMITY_SIBLING,
   SCORE_RECENT_MAX, SCORE_RECENT_DECAY, SCORE_LENGTH_PENALTY_CAP,
-  MAX_RECENT_SYMBOLS,
+  MAX_RECENT_SYMBOLS, MAX_FILE_SEARCH_RESULTS,
 } from './constants';
 
 // ── Symbol categories ────────────────────────────────────────────────────────
@@ -18,6 +18,7 @@ export enum SymbolCategory {
   Variable = 'Variables & Constants',
   Enum = 'Enums',
   Other = 'Other',
+  File = 'Files',
 }
 
 export const CATEGORY_ORDER: SymbolCategory[] = [
@@ -27,6 +28,7 @@ export const CATEGORY_ORDER: SymbolCategory[] = [
   SymbolCategory.Variable,
   SymbolCategory.Enum,
   SymbolCategory.Other,
+  SymbolCategory.File,
 ];
 
 export function symbolKindToCategory(kind: vscode.SymbolKind): SymbolCategory {
@@ -83,6 +85,11 @@ export function symbolKindToIconId(kind: vscode.SymbolKind): string {
 export interface RankedSymbol {
   symbol: vscode.SymbolInformation;
   category: SymbolCategory;
+  score: number;
+}
+
+export interface RankedFile {
+  uri: vscode.Uri;
   score: number;
 }
 
@@ -159,6 +166,53 @@ export class SymbolRanker {
         symbol: sym,
         category: symbolKindToCategory(sym.kind),
         score: matchScore + kindScore + pathScore + recentScore + proximity + langBoost + testPenalty - lengthPenalty,
+      });
+    }
+
+    results.sort((a, b) => b.score - a.score);
+    return maxResults > 0 ? results.slice(0, maxResults) : results;
+  }
+
+  rankFiles(
+    query: string,
+    fileUris: vscode.Uri[],
+    contextUri?: vscode.Uri,
+    maxResults = MAX_FILE_SEARCH_RESULTS,
+    mainLangExtensions: string[] = [],
+    isTest?: (uri: vscode.Uri) => boolean,
+  ): RankedFile[] {
+    const queryLower = query.toLowerCase();
+    const contextDir = contextUri ? path.dirname(contextUri.fsPath) : undefined;
+    const results: RankedFile[] = [];
+
+    for (const uri of fileUris) {
+      const basename = path.basename(uri.fsPath);
+      const baseNoExt = basename.replace(/\.[^.]+$/, '');
+      const basenameLower = basename.toLowerCase();
+      const baseNoExtLower = baseNoExt.toLowerCase();
+
+      let matchScore = 0;
+      if (baseNoExtLower === queryLower) {
+        matchScore = SCORE_EXACT_MATCH;
+      } else if (baseNoExtLower.startsWith(queryLower)) {
+        matchScore = SCORE_STARTS_WITH;
+      } else if (camelCaseMatch(queryLower, baseNoExt)) {
+        matchScore = SCORE_CAMEL_CASE;
+      } else if (basenameLower.includes(queryLower)) {
+        matchScore = SCORE_CONTAINS;
+      } else {
+        continue;
+      }
+
+      const pathScore = this.pathScore(uri);
+      const proximity = this.proximityScore(uri, contextDir);
+      const langBoost = mainLangScore(uri, mainLangExtensions);
+      const testPenalty = isTest?.(uri) ? SCORE_TEST_PENALTY : 0;
+      const lengthPenalty = Math.min(basename.length, SCORE_LENGTH_PENALTY_CAP);
+
+      results.push({
+        uri,
+        score: matchScore + pathScore + proximity + langBoost + testPenalty - lengthPenalty,
       });
     }
 

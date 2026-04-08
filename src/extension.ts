@@ -222,18 +222,9 @@ export function activate(context: vscode.ExtensionContext): SmartReferencesExten
       outputChannel.appendLine(`[project-explorer] reveal error: ${String(err)}`);
     }
   };
-  // Title = workspace folder name + remote indicator (like native Explorer)
   const wsName = vscode.workspace.workspaceFolders?.[0]?.name;
   if (wsName) {
-    let title = wsName;
-    const remoteName = vscode.env.remoteName;
-    if (remoteName === 'wsl') {
-      const distro = process.env.WSL_DISTRO_NAME || 'Linux';
-      title += ` [WSL: ${distro}]`;
-    } else if (remoteName) {
-      title += ` [${remoteName}]`;
-    }
-    projectExplorerView.title = title;
+    projectExplorerView.title = wsName;
   }
   const updateProjectExplorerMessage = () => {
     projectExplorerView.message = projectExplorer.getStatusMessage() ?? '';
@@ -254,15 +245,15 @@ export function activate(context: vscode.ExtensionContext): SmartReferencesExten
     }
   });
 
-  // Dim Unity .meta files in the file explorer
-  const metaFileDecor = vscode.window.registerFileDecorationProvider({
+  // Dim configured file extensions in the native file explorer
+  const dimFileDecor = vscode.window.registerFileDecorationProvider({
     provideFileDecoration(uri: vscode.Uri): vscode.FileDecoration | undefined {
       if (uri.scheme !== 'file') return undefined;
-      if (!uri.fsPath.endsWith('.meta')) return undefined;
-      return {
-        color: new vscode.ThemeColor('disabledForeground'),
-        tooltip: 'Unity meta file',
-      };
+      const exts = vscode.workspace.getConfiguration('smartReferences')
+        .get<string[]>('projectExplorer.dimFileExtensions', []);
+      if (exts.length === 0) return undefined;
+      if (!exts.some(ext => uri.fsPath.endsWith(ext))) return undefined;
+      return { color: new vscode.ThemeColor('disabledForeground') };
     },
   });
 
@@ -481,7 +472,7 @@ export function activate(context: vscode.ExtensionContext): SmartReferencesExten
     depProvider,
     compositeDepIndexer,
     ...depWatchers,
-    metaFileDecor,
+    dimFileDecor,
     csharpUsingLinkProvider,
     csharpLinks,
     csharpWsTypeIndexer,

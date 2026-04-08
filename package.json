@@ -768,6 +768,14 @@
           "default": true,
           "description": "Dim test files and show 'T' badge in native Explorer"
         },
+        "smartReferences.projectExplorer.dimFileExtensions": {
+          "type": "array",
+          "default": [".meta"],
+          "items": {
+            "type": "string"
+          },
+          "description": "File extensions to dim in Project Explorer and native Explorer (e.g. [\".meta\", \".map\"]). Dimmed files are still tracked by VCS."
+        },
         "smartReferences.symbolSearch.maxResultsPerCategory": {
           "type": "number",
           "default": 15,

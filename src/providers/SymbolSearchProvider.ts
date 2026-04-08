@@ -1,22 +1,26 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { ReferencePreviewManager } from './ReferencePreviewManager';
 import {
   SymbolRanker,
   RankedSymbol,
+  RankedFile,
   SymbolCategory,
   CATEGORY_ORDER,
   symbolKindToCategory,
   symbolKindToIconId,
 } from '../core/SymbolRanker';
+import { MAX_FILE_SEARCH_RESULTS } from '../core/constants';
 import { TestFileDetector } from '../analyzers/TestFileDetector';
 import { DepSymbolIndexer } from '../core/GoDepSymbolIndexer';
-import { detectMainWorkspaceLanguage } from '../core/WorkspaceLanguage';
+import { detectMainWorkspaceLanguage, WorkspaceLanguageId } from '../core/WorkspaceLanguage';
 import { ProtoWorkspaceNavigator } from '../core/ProtoWorkspaceNavigator';
 
 // ── QuickPick item ───────────────────────────────────────────────────────────
 
 interface SymbolQuickPickItem extends vscode.QuickPickItem {
   symbolInfo?: vscode.SymbolInformation;
+  fileUri?: vscode.Uri;
 }
 
 // ── Provider ─────────────────────────────────────────────────────────────────
@@ -34,6 +38,7 @@ export class SymbolSearchProvider implements vscode.Disposable {
   private contextUri: vscode.Uri | undefined;
   private activeCategories: SymbolCategory[] = [];
   private mainLangExts: string[] = [];
+  private mainLangId: WorkspaceLanguageId = 'unknown';
   private config = { debounceMs: 150, maxPerCategory: 15, maxTotal: 80 };
   private isDepSearch = false;
   private depSymbolCache: vscode.SymbolInformation[] | undefined;
@@ -67,8 +72,10 @@ export class SymbolSearchProvider implements vscode.Disposable {
     };
 
     this.activeCategories = categories;
-    this.mainLangExts = (await detectMainWorkspaceLanguage()).extensions;
-    this.log.appendLine(`[init] main language extensions: [${this.mainLangExts.join(', ')}]`);
+    const langProfile = await detectMainWorkspaceLanguage();
+    this.mainLangExts = langProfile.extensions;
+    this.mainLangId = langProfile.id;
+    this.log.appendLine(`[init] main language: ${this.mainLangId}, extensions: [${this.mainLangExts.join(', ')}]`);
     const editor = vscode.window.activeTextEditor;
     this.contextUri = editor?.document.uri;
 
@@ -120,7 +127,9 @@ export class SymbolSearchProvider implements vscode.Disposable {
     this.isDepSearch = true;
     this.depSymbolCache = undefined;
     this.activeCategories = [SymbolCategory.Function, SymbolCategory.Class, SymbolCategory.Interface];
-    this.mainLangExts = (await detectMainWorkspaceLanguage()).extensions;
+    const depLangProfile = await detectMainWorkspaceLanguage();
+    this.mainLangExts = depLangProfile.extensions;
+    this.mainLangId = depLangProfile.id;
     this.contextUri = vscode.window.activeTextEditor?.document.uri;
 
     const qp = vscode.window.createQuickPick<SymbolQuickPickItem>();
@@ -205,24 +214,38 @@ export class SymbolSearchProvider implements vscode.Disposable {
     token: vscode.CancellationToken,
   ): Promise<void> {
     try {
-      let symbols: vscode.SymbolInformation[] | undefined;
-      let queryAliases: string[] = [];
-      if (this.contextUri && this.protoNavigator.isProtoUri(this.contextUri)) {
-        const protoSearch = await this.protoNavigator.searchSymbolsForQuery(this.contextUri, query);
-        symbols = protoSearch.symbols;
-        queryAliases = protoSearch.aliases;
-      }
-      if (!symbols || symbols.length === 0) {
-        symbols = await vscode.commands.executeCommand<vscode.SymbolInformation[]>(
-          'vscode.executeWorkspaceSymbolProvider',
-          query,
-        );
-      }
+      const symbolPromise = (async () => {
+        let symbols: vscode.SymbolInformation[] | undefined;
+        let queryAliases: string[] = [];
+        if (this.contextUri && this.protoNavigator.isProtoUri(this.contextUri)) {
+          const protoSearch = await this.protoNavigator.searchSymbolsForQuery(this.contextUri, query);
+          symbols = protoSearch.symbols;
+          queryAliases = protoSearch.aliases;
+        }
+        if (!symbols || symbols.length === 0) {
+          symbols = await vscode.commands.executeCommand<vscode.SymbolInformation[]>(
+            'vscode.executeWorkspaceSymbolProvider',
+            query,
+          );
+        }
+        return { symbols: symbols ?? [], queryAliases };
+      })();
+
+      const shouldSearchFiles = this.activeCategories.length === 0;
+      const filePromise = shouldSearchFiles
+        ? vscode.workspace.findFiles(
+            `**/*${toInsensitiveGlob(query)}*`,
+            getFileSearchExcludePattern(this.mainLangId),
+            MAX_FILE_SEARCH_RESULTS,
+            token,
+          )
+        : Promise.resolve([]);
+
+      const [{ symbols: all, queryAliases }, fileUris] = await Promise.all([symbolPromise, filePromise]);
       if (token.isCancellationRequested || !this.quickPick) return;
 
-      const all = symbols ?? [];
       const filteredSymbols = all.filter(s => matchesActiveCategories(s.kind, this.activeCategories));
-      this.log.appendLine(`[search] query="${query}" aliases=[${queryAliases.join(',')}] categories=[${this.activeCategories.join(',')}] raw=${all.length} symbols`);
+      this.log.appendLine(`[search] query="${query}" aliases=[${queryAliases.join(',')}] categories=[${this.activeCategories.join(',')}] raw=${all.length} symbols, files=${fileUris.length}`);
       const kindCounts: Record<number, number> = {};
       const extCounts: Record<string, number> = {};
       for (const s of all) {
@@ -232,7 +255,6 @@ export class SymbolSearchProvider implements vscode.Disposable {
       }
       this.log.appendLine(`[search] kind distribution: ${JSON.stringify(kindCounts)}`);
       this.log.appendLine(`[search] file ext distribution: ${JSON.stringify(extCounts)}`);
-      // Log first 10 raw symbols for diagnosis
       for (const s of all.slice(0, 10)) {
         const rel = vscode.workspace.asRelativePath(s.location.uri);
         this.log.appendLine(`[search]   kind=${s.kind} name="${s.name}" file=${rel}`);
@@ -249,7 +271,19 @@ export class SymbolSearchProvider implements vscode.Disposable {
         queryAliases,
       );
       this.log.appendLine(`[search] after rank+dedup: ${ranked.length}`);
-      this.quickPick.items = this.buildItems(ranked);
+
+      const rankedFiles = shouldSearchFiles
+        ? this.ranker.rankFiles(
+            query,
+            fileUris,
+            this.contextUri,
+            this.config.maxPerCategory,
+            this.mainLangExts,
+            uri => this.testDetector.isTestFile(uri),
+          )
+        : [];
+
+      this.quickPick.items = this.buildItems(ranked, rankedFiles);
     } catch (err) {
       this.log.appendLine(`[search] error: ${String(err)}`);
     } finally {
@@ -290,9 +324,8 @@ export class SymbolSearchProvider implements vscode.Disposable {
     }
   }
 
-  private buildItems(ranked: RankedSymbol[]): SymbolQuickPickItem[] {
+  private buildItems(ranked: RankedSymbol[], files: RankedFile[] = []): SymbolQuickPickItem[] {
     const cats = this.activeCategories;
-    // Split each category into production and test groups
     const prodGrouped = new Map<SymbolCategory, RankedSymbol[]>();
     const testGrouped = new Map<SymbolCategory, RankedSymbol[]>();
     for (const r of ranked) {
@@ -303,6 +336,7 @@ export class SymbolSearchProvider implements vscode.Disposable {
 
     const items: SymbolQuickPickItem[] = [];
     const catOrder = cats.length > 0 ? cats : CATEGORY_ORDER;
+    const symbolCatOrder = catOrder.filter(c => c !== SymbolCategory.File);
     const perCat = cats.length > 0 ? this.config.maxTotal : this.config.maxPerCategory;
 
     const pushSymbol = (s: RankedSymbol) => {
@@ -321,20 +355,48 @@ export class SymbolSearchProvider implements vscode.Disposable {
       });
     };
 
-    // Production symbols first (no suffix on separator)
-    for (const cat of catOrder) {
+    const pushFile = (f: RankedFile) => {
+      const rel = vscode.workspace.asRelativePath(f.uri);
+      const basename = path.basename(f.uri.fsPath);
+      items.push({
+        label: `$(file) ${basename}`,
+        detail: rel,
+        fileUri: f.uri,
+        alwaysShow: true,
+      });
+    };
+
+    // Production symbols
+    for (const cat of symbolCatOrder) {
       const symbols = prodGrouped.get(cat);
       if (!symbols || symbols.length === 0) continue;
       items.push({ label: cat, kind: vscode.QuickPickItemKind.Separator });
       for (const s of symbols.slice(0, perCat)) pushSymbol(s);
     }
 
-    // Test symbols after, with "(Tests)" suffix on separator
-    for (const cat of catOrder) {
+    // Split files into production and test
+    const prodFiles: RankedFile[] = [];
+    const testFiles: RankedFile[] = [];
+    for (const f of files) {
+      (this.testDetector.isTestFile(f.uri) ? testFiles : prodFiles).push(f);
+    }
+
+    if (prodFiles.length > 0) {
+      items.push({ label: SymbolCategory.File, kind: vscode.QuickPickItemKind.Separator });
+      for (const f of prodFiles.slice(0, perCat)) pushFile(f);
+    }
+
+    // Test symbols
+    for (const cat of symbolCatOrder) {
       const symbols = testGrouped.get(cat);
       if (!symbols || symbols.length === 0) continue;
       items.push({ label: `${cat}  $(beaker) Tests`, kind: vscode.QuickPickItemKind.Separator });
       for (const s of symbols.slice(0, perCat)) pushSymbol(s);
+    }
+
+    if (testFiles.length > 0) {
+      items.push({ label: `${SymbolCategory.File}  $(beaker) Tests`, kind: vscode.QuickPickItemKind.Separator });
+      for (const f of testFiles.slice(0, perCat)) pushFile(f);
     }
 
     return items;
@@ -399,8 +461,16 @@ export class SymbolSearchProvider implements vscode.Disposable {
 
   private async onAccepted(): Promise<void> {
     const selected = this.quickPick?.selectedItems[0];
-    if (!selected?.symbolInfo) return;
+    if (!selected) return;
 
+    if (selected.fileUri) {
+      this.quickPick?.hide();
+      const doc = await vscode.workspace.openTextDocument(selected.fileUri);
+      await vscode.window.showTextDocument(doc, { preview: false });
+      return;
+    }
+
+    if (!selected.symbolInfo) return;
     const loc = selected.symbolInfo.location;
     this.ranker.recordAccess(selected.symbolInfo);
     this.quickPick?.hide();
@@ -435,6 +505,37 @@ export class SymbolSearchProvider implements vscode.Disposable {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+const FILE_SEARCH_EXCLUDE_DIRS: Record<WorkspaceLanguageId, string[]> = {
+  go:         ['.git', 'vendor', 'testdata', 'dist', 'out'],
+  rust:       ['.git', 'target', 'dist', 'out'],
+  java:       ['.git', 'target', 'build', 'out', '.gradle', '.idea'],
+  kotlin:     ['.git', 'build', 'out', '.gradle', '.idea'],
+  typescript: ['.git', 'node_modules', 'dist', 'out', 'build', 'coverage'],
+  javascript: ['.git', 'node_modules', 'dist', 'out', 'build', 'coverage'],
+  python:     ['.git', '__pycache__', '.venv', 'venv', 'dist', 'build', '.eggs'],
+  csharp:     ['.git', 'bin', 'obj', 'node_modules', 'packages'],
+  unknown:    ['.git', 'node_modules', 'vendor', 'dist', 'out', 'target', 'coverage'],
+};
+
+function getFileSearchExcludePattern(langId: WorkspaceLanguageId): string {
+  const dirs = FILE_SEARCH_EXCLUDE_DIRS[langId];
+  return `**/{${dirs.join(',')}}/**`;
+}
+
+function toInsensitiveGlob(s: string): string {
+  let out = '';
+  for (const ch of s) {
+    const lo = ch.toLowerCase();
+    const up = ch.toUpperCase();
+    if (lo !== up) {
+      out += `[${lo}${up}]`;
+    } else {
+      out += ch.replace(/[[\]{}?*]/g, '\\$&');
+    }
+  }
+  return out;
+}
 
 function buildTitle(categories: SymbolCategory[]): string {
   if (categories.length === 1 && categories[0] === SymbolCategory.Function) {

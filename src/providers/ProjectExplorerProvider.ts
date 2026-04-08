@@ -214,10 +214,15 @@ class ProjDirectoryNode extends vscode.TreeItem {
     public readonly projectRoot = '',
     label?: string,
     public readonly parentDirPath = '',
+    dimmed = false,
   ) {
     super(label ?? path.basename(dirPath), vscode.TreeItemCollapsibleState.Collapsed);
     this.id = `dir:${projectRoot}|${category}|${dirPath}`;
-    this.resourceUri = vscode.Uri.file(path.join(workspaceRoot, joinProjectPath(projectRoot, dirPath)));
+    this.iconPath = vscode.ThemeIcon.Folder;
+    if (dimmed) {
+      const fullPath = path.join(workspaceRoot, joinProjectPath(projectRoot, dirPath));
+      this.resourceUri = vscode.Uri.from({ scheme: PROJ_DIMMED_SCHEME, path: fullPath });
+    }
     this.contextValue = 'projectDir';
     this.tooltip = joinProjectPath(projectRoot, dirPath);
   }
@@ -262,6 +267,7 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
   private ignoredDirs = new Set<string>();
   private ignoredEntrySet = new Set<string>();
   private testFileSet = new Set<string>();
+  private ignoredFileSet = new Set<string>();
   private ignoredEntries: string[] = [];
   private hasSource = false;
   private hasTest = false;
@@ -274,6 +280,7 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
   private visible = false;
   private dirty = true;
   private lastRefreshMessage: string | undefined;
+  private dimFileExtensions: string[] = [];
 
   constructor(
     private testDetector: TestFileDetector,
@@ -342,6 +349,9 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
 
   private async _doRefresh(): Promise<void> {
     try {
+      this.dimFileExtensions = vscode.workspace.getConfiguration('smartReferences')
+        .get<string[]>('projectExplorer.dimFileExtensions', []);
+
       const [trackedOutput, ignoredOutput, untrackedOutput] = await Promise.all([
         this.execGit(['ls-files']),
         this.execGit(['ls-files', '--others', '--ignored', '--exclude-standard', '--directory']),
@@ -350,10 +360,24 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
 
       const allTracked = trackedOutput.split('\n').filter(Boolean);
       const untrackedFiles = untrackedOutput.split('\n').filter(Boolean);
-      const allProjectFiles = [...allTracked, ...untrackedFiles];
       this.ignoredEntries = ignoredOutput.split('\n').filter(Boolean);
       const ignoredTree = buildIgnoredTree(this.ignoredEntries);
       this.ignoredEntrySet = new Set(this.ignoredEntries.map(entry => entry.replace(/\/$/, '')));
+
+      // Separate ignored entries into individual files and directories
+      const ignoredFiles: string[] = [];
+      const ignoredDirPaths: string[] = [];
+      for (const entry of this.ignoredEntries) {
+        if (entry.endsWith('/')) {
+          ignoredDirPaths.push(entry.replace(/\/$/, ''));
+        } else {
+          ignoredFiles.push(entry);
+        }
+      }
+      this.ignoredFileSet = new Set(ignoredFiles);
+
+      // allProjectFiles includes tracked + untracked (no ignored)
+      const allProjectFiles = [...allTracked, ...untrackedFiles];
 
       const sourceFiles: string[] = [];
       const testFiles: string[] = [];
@@ -391,7 +415,23 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
 
       this.sourceIndex = buildDirIndex(sourceFiles);
       this.testIndex = buildDirIndex(testFiles);
-      this.allIndex = buildDirIndex(allProjectFiles);
+      // allIndex for merged view: includes individual ignored files
+      this.allIndex = buildDirIndex([...allProjectFiles, ...ignoredFiles]);
+      // Add ignored directories into allIndex so they appear in the merged tree
+      for (const dir of ignoredDirPaths) {
+        const parts = dir.split('/');
+        for (let i = 0; i < parts.length; i++) {
+          const parent = i === 0 ? '' : parts.slice(0, i).join('/');
+          const child = parts.slice(0, i + 1).join('/');
+          if (!this.allIndex.has(parent)) this.allIndex.set(parent, { subdirs: [], files: [] });
+          const parentEntry = this.allIndex.get(parent)!;
+          if (!parentEntry.subdirs.includes(child)) {
+            parentEntry.subdirs.push(child);
+            parentEntry.subdirs.sort();
+          }
+          if (!this.allIndex.has(child)) this.allIndex.set(child, { subdirs: [], files: [] });
+        }
+      }
       this.cppCategoryIndexes = new Map(
         CPP_PROJECT_CATEGORY_IDS.map(category => [category, buildDirIndex(cppBuckets.get(category) ?? [])]),
       );
@@ -502,11 +542,7 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
       }
 
       if (this.viewMode === 'merged') {
-        const nodes = this.getFromIndex(this.allIndex, '', 'all');
-        if (this.ignoredEntries.length > 0) {
-          nodes.push(new CategoryNode('ignored', t('已忽略', 'Ignored'), 'circle-slash'));
-        }
-        return nodes;
+        return this.getFromIndex(this.allIndex, '', 'all');
       }
 
       if (this.viewMode === 'cpp-project') {
@@ -553,6 +589,11 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
 
     if (element instanceof ProjDirectoryNode) {
       if (element.category === 'ignored') return this.getIgnoredChildren(element.dirPath);
+      // In merged mode, ignored directories are in allIndex but their contents
+      // need to be read from the filesystem
+      if (this.viewMode === 'merged' && this.isIgnoredDirOrInside(element.dirPath)) {
+        return this.readIgnoredDir(element.dirPath, true);
+      }
       const index = this.getIndexForCategory(element.category, element.projectRoot);
       return this.getFromIndex(index, element.dirPath, element.category, element.projectRoot);
     }
@@ -571,7 +612,8 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
     const nodes: ProjectNode[] = [];
     for (const subdir of entry.subdirs) {
       const visibleDir = this.buildVisibleDirNode(index, subdir, dirPath);
-      nodes.push(new ProjDirectoryNode(visibleDir.dirPath, category, this.workspaceRoot, projectRoot, visibleDir.label, visibleDir.parentDirPath));
+      const dimDir = this.viewMode === 'merged' && this.isIgnoredDirOrInside(visibleDir.dirPath);
+      nodes.push(new ProjDirectoryNode(visibleDir.dirPath, category, this.workspaceRoot, projectRoot, visibleDir.label, visibleDir.parentDirPath, dimDir));
     }
     for (const fileName of entry.files) {
       const relativePath = dirPath ? `${dirPath}/${fileName}` : fileName;
@@ -588,7 +630,7 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
     return this.getFromIndex(this.ignoredIndex, dirPath, 'ignored');
   }
 
-  private async readIgnoredDir(dirRelative: string): Promise<ProjectNode[]> {
+  private async readIgnoredDir(dirRelative: string, dimmed = false): Promise<ProjectNode[]> {
     const fullPath = path.join(this.workspaceRoot, dirRelative);
     try {
       const entries = (await fs.promises.readdir(fullPath, { withFileTypes: true }))
@@ -596,18 +638,23 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
         .sort((a, b) => a.name.localeCompare(b.name));
       const dirEntries = entries.filter(e => e.isDirectory());
       const fileEntries = entries.filter(e => !e.isDirectory());
+      const category: ViewCategory = dimmed ? 'all' : 'ignored';
       const dirs = await Promise.all(
         dirEntries.map(async e => {
           const relative = `${dirRelative}/${e.name}`;
           const visibleDir = await this.buildVisibleFsDirNode(relative, dirRelative);
-          return new ProjDirectoryNode(visibleDir.dirPath, 'ignored', this.workspaceRoot, '', visibleDir.label, visibleDir.parentDirPath);
+          return new ProjDirectoryNode(visibleDir.dirPath, category, this.workspaceRoot, '', visibleDir.label, visibleDir.parentDirPath, dimmed);
         }),
       );
-      const files = fileEntries.map(e => new ProjFileNode(`${dirRelative}/${e.name}`, this.workspaceRoot, false));
+      const files = fileEntries.map(e => new ProjFileNode(`${dirRelative}/${e.name}`, this.workspaceRoot, dimmed));
       return [...dirs, ...files];
     } catch {
       return [];
     }
+  }
+
+  private isIgnoredDirOrInside(dirPath: string): boolean {
+    return this.ignoredDirs.has(dirPath) || this.isInsideIgnoredDir(dirPath);
   }
 
   private isInsideIgnoredDir(dirPath: string): boolean {
@@ -634,9 +681,12 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
   }
 
   private getCategoryForPath(relativePath: string): ViewCategory | undefined {
+    // In merged mode, ignored files are part of the 'all' tree
+    if (this.viewMode === 'merged') {
+      return this.hasFile(this.allIndex, relativePath) ? 'all' : undefined;
+    }
     if (this.isIgnoredPath(relativePath)) return 'ignored';
     if (!this.hasFile(this.allIndex, relativePath)) return undefined;
-    if (this.viewMode === 'merged') return 'all';
     if (this.viewMode === 'categorized') {
       return this.testFileSet.has(relativePath) ? 'tests' : 'sources';
     }
@@ -655,6 +705,8 @@ export class ProjectExplorerProvider implements vscode.TreeDataProvider<ProjectN
 
   private shouldDimFile(relativePath: string, category: ViewCategory): boolean {
     if (category === 'ignored') return false;
+    if (this.dimFileExtensions.length > 0 && this.dimFileExtensions.some(ext => relativePath.endsWith(ext))) return true;
+    if (this.viewMode === 'merged' && this.ignoredFileSet.has(relativePath)) return true;
     if (this.viewMode === 'merged' && this.testFileSet.has(relativePath)) return shouldDimMergedTestFile(relativePath);
     if (this.viewMode === 'cpp-project' && category !== 'cppBuild' && isGeneratedProjectPath(relativePath)) return true;
     return false;
